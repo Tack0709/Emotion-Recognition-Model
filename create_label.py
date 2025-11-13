@@ -1,19 +1,20 @@
 import os
 import numpy as np
+import sys
+from collections import defaultdict
 
 def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data'):
     """
     IEMOCAPのEmoEvaluationファイル を解析し、
     ハードラベルとソフトラベルの辞書を作成して.npyファイルとして保存します。
     
-    処理は tack0709/erc-slt22/.../data_prep_process_label.py に準拠しています。
+    (修正版：C-E, C-F, C-M のすべての行を読み込むように修正)
     """
     
     # --- 1. ディレクトリ設定 ---
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Session1から5までの EmoEvaluation ディレクトリパスを生成
     file_roots = [
         os.path.join(iemo_root, f"Session{i}/dialog/EmoEvaluation") 
         for i in range(1, 6)
@@ -35,80 +36,77 @@ def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data
 
     # --- 2. ラベルマッピング定義 (ERC-SLT22 準拠) ---
     
-    # ソフトラベル用マッピング (5クラス: neu, hap/exc, sad, ang, oth)
-    # 'exc' (excited) は 'hap' (happiness) に統合されます。
     mapping = {
         'Neutral':   [1, 0, 0, 0, 0],
         'Happiness': [0, 1, 0, 0, 0],
         'Excited':   [0, 1, 0, 0, 0], # Happinessに統合
         'Sadness':   [0, 0, 1, 0, 0],
         'Anger':     [0, 0, 0, 1, 0]
-        # 上記以外は 'Other' [0, 0, 0, 0, 1]として処理されます
     }
+    OTHER_VECTOR = [0, 0, 0, 0, 1]
     
-    # ハードラベル用マッピング (6クラス: xxx, oth を含む)
     emo_dic = {
-        'neu': 0, # Neutral
-        'hap': 1, # Happiness / Excited
-        'sad': 2, # Sadness
-        'ang': 3, # Anger
-        'oth': 4, # Other
-        'xxx': 5  # Garbage/No agreement
+        'neu': 0, 'hap': 1, 'sad': 2, 'ang': 3, 'oth': 4, 'xxx': 5
     }
 
     # --- 3. ファイル解析とデータ抽出 ---
-    hard_label_dic = {} # {発話ID: ラベルIndex}
-    soft_label_dic = {} # {発話ID: [n, h, s, a, o] の合計値配列}
+    hard_label_dic = {} 
+    soft_label_dic = {} 
 
     current_utt_id = None
     current_hard_label = None
     current_soft_labels = []
 
     for label_path in file_paths:
-        with open(label_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                
-                if not line:
-                    continue
-
-                # 画像 の [START_TIME - END_TIME] TURN_NAME EMOTION ... の行
-                if line.startswith('['):
-                    # 以前の発話IDのデータを保存
-                    if current_utt_id:
-                        # ハードラベルの正規化 ('exc' -> 'hap', それ以外 -> 'oth')
-                        if current_hard_label == 'exc':
-                            current_hard_label = 'hap'
-                        if current_hard_label not in emo_dic:
-                            current_hard_label = 'oth'
-                        
-                        # ハードラベル辞書に保存
-                        hard_label_dic[current_utt_id] = emo_dic[current_hard_label]
-                        
-                        # ソフトラベル辞書に保存 (合計値)
-                        if current_soft_labels:
-                            soft_label_dic[current_utt_id] = np.array(current_soft_labels).sum(axis=0)
-                        else:
-                            # C-E行が全くなかった場合は、[0,0,0,0,0] を設定
-                            soft_label_dic[current_utt_id] = np.array([0, 0, 0, 0, 0])
-
-                    # 新しい発話データを初期化
-                    parts = line.split()
-                    current_utt_id = parts[3]       # 例: Ses01F_impro01_F000
-                    current_hard_label = parts[4] # 例: neu
-                    current_soft_labels = []        # 評価者ごとのラベルリストをリセット
-
-                # 画像 の C-E: ... の行
-                elif line.startswith('C-E'):
-                    parts = line.split()
-                    # C-E: Neutral; () のような行から 'Neutral' のみ取得
-                    emotion_tags = parts[1].split(';')
+        try:
+            with open(label_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
                     
-                    for tag in emotion_tags:
-                        if not tag:
-                            continue
-                        # 'mapping' にあればそのベクトルを、なければ 'Other' のベクトルを追加
-                        current_soft_labels.append(mapping.get(tag, [0, 0, 0, 0, 1]))
+                    if not line:
+                        continue
+
+                    if line.startswith('['):
+                        # --- 以前の発話IDのデータを保存 ---
+                        if current_utt_id:
+                            if current_hard_label == 'exc':
+                                current_hard_label = 'hap'
+                            if current_hard_label not in emo_dic:
+                                current_hard_label = 'oth'
+                            
+                            hard_label_dic[current_utt_id] = emo_dic[current_hard_label]
+                            
+                            if current_soft_labels:
+                                soft_label_dic[current_utt_id] = np.array(current_soft_labels).sum(axis=0)
+                            else:
+                                soft_label_dic[current_utt_id] = np.array([0, 0, 0, 0, 0])
+
+                        # --- 新しい発話データを初期化 ---
+                        parts = line.split()
+                        if len(parts) > 4:
+                            current_utt_id = parts[3]       # 例: Ses01F_impro01_F000
+                            current_hard_label = parts[4].lower() # 例: neu
+                            current_soft_labels = []        
+                        else:
+                            current_utt_id = None 
+                    
+                    # #############################################################
+                    # ⬇️ 修正点: 'C-E' だけでなく 'C-F' や 'C-M' も対象にする
+                    # #############################################################
+                    elif (line.startswith('C-E') or line.startswith('C-F') or line.startswith('C-M')) and current_utt_id:
+                        parts = line.split()
+                        # C-F1: Neutral; Anger; () のような行から 'Neutral', 'Anger' を取得
+                        emotion_tags = parts[1].split(';')
+                        
+                        for tag in emotion_tags:
+                            if tag and tag != '()': # 空白や()を除外
+                                current_soft_labels.append(mapping.get(tag, OTHER_VECTOR))
+                    # #############################################################
+
+        except Exception as e:
+            print(f"エラー: ファイル {label_path} の処理中に問題が発生しました: {e}")
+            sys.exit(1)
+
 
     # --- 最後の発話データを保存 ---
     if current_utt_id:
@@ -127,17 +125,25 @@ def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data
     hard_label_path = os.path.join(output_dir, 'IEMOCAP-hardlabel.npy')
     soft_label_path = os.path.join(output_dir, 'IEMOCAP-softlabel-sum.npy')
 
-    np.save(hard_label_path, hard_label_dic)
-    np.save(soft_label_path, soft_label_dic)
+    try:
+        np.save(hard_label_path, hard_label_dic)
+        np.save(soft_label_path, soft_label_dic)
+    except Exception as e:
+        print(f"エラー: ファイルの保存中に問題が発生しました: {e}")
+        sys.exit(1)
 
-    print(f"処理完了。発話数: {len(hard_label_dic)}")
-    print(f"ハードラベル辞書を保存しました: {hard_label_path}")
-    print(f"ソフトラベル辞書を保存しました: {soft_label_path}")
+    print(f"処理完了。総発話数: {len(hard_label_dic)}")
+    print(f"  ➡️  {hard_label_path} (ハードラベル辞書)")
+    print(f"  ➡️  {soft_label_path} (ソフトラベル合計値辞書)")
+    
+    if len(hard_label_dic) != 10039 or len(soft_label_dic) != 10039:
+        print(f"Warning: 期待される発話数(10039)と一致しません。 検出数: {len(hard_label_dic)}")
+    else:
+        print("発話数が期待値(10039)と一致しました。")
+
 
 # --- スクリプト実行 ---
 if __name__ == "__main__":
-    # IEMOCAP_full_release ディレクトリがこのスクリプトと同じ階層にあると仮定
-    # 出力先は 'output_data' ディレクトリ
     create_label_files(
         iemo_root='IEMOCAP_full_release', 
         output_dir='output_data'
