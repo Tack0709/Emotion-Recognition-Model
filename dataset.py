@@ -12,12 +12,16 @@ class MultimodalDAGDataset(Dataset):
     固定分割 (Ses1-4: Train/Dev, Ses5: Test) を行うデータセット。
     .scp ファイル を使用せず、order.pkl のキー（セッションID）に基づいて動的に分割する。
     """
-    def __init__(self, dataset_name='IEMOCAP', split='train', speaker_vocab=None, args=None, dev_ratio=0.1):
+    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1):
         self.speaker_vocab = speaker_vocab
         self.args = args
-        datapath = os.path.join('../data', dataset_name) 
+        datapath = data_dir
+        
+        # 修正: データディレクトリの存在確認を追加
+        if not os.path.exists(data_dir): # <--- 追加
+            raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
 
-        print(f"Loading {split} data...")
+        print(f"Loading {split} data from {data_dir}...")
 
         # 1. IDをキーとする辞書を先に読み込む
         self.bert_features = np.load(os.path.join(datapath, 'bert-base-diag.npy'), allow_pickle=True).item()

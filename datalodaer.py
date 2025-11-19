@@ -15,11 +15,11 @@ def get_train_valid_sampler(trainset):
     # (注: trainset.session_list のインデックス 0~size-1 をシャッフルする)
     return SubsetRandomSampler(idx)
 
-def load_vocab(dataset_name):
+def load_vocab(data_dir):
     """
     話者語彙とラベル語彙をロード（または定義）する。
     """
-    datapath = os.path.join('../data', dataset_name)
+    datapath = data_dir
     
     # 話者語彙（性別）をロード
     speaker_vocab_path = os.path.join(datapath, 'speaker_vocab.pkl')
@@ -37,7 +37,7 @@ def load_vocab(dataset_name):
 
     return speaker_vocab, label_vocab
 
-def get_multimodal_loaders(dataset_name = 'IEMOCAP', batch_size=32, num_workers=0, pin_memory=False, args = None):
+def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, pin_memory=False, args = None):
     """
     修正版 MultimodalDAGDataset を使用して、
     train/valid/test 用の DataLoader を作成する。
