@@ -39,6 +39,9 @@ def create_metadata_files(iemo_root='IEMOCAP_full_release', output_dir='output_d
             continue
             
         for file in os.listdir(path):
+            # 修正: '._' で始まるファイルは無視する
+            if file.startswith('._'):
+                continue
             if not file.endswith('.txt'):
                 continue
                 
@@ -106,6 +109,6 @@ if __name__ == "__main__":
     # IEMOCAP_full_release ディレクトリがこのスクリプトと同じ階層にあると仮定
     # 出力先は 'output_data' ディレクトリ
     create_metadata_files(
-        iemo_root='IEMOCAP_full_release', 
+        iemo_root=r'/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release', 
         output_dir='output_data'
     )

@@ -3,7 +3,7 @@ import numpy as np
 import sys
 from collections import defaultdict
 
-def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data'):
+def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_data'):
     """
     IEMOCAPのEmoEvaluationファイル を解析し、
     ハードラベルとソフトラベルの辞書を作成して.npyファイルとして保存します。
@@ -19,6 +19,8 @@ def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data
         os.path.join(iemo_root, f"Session{i}/dialog/EmoEvaluation") 
         for i in range(1, 6)
     ]
+    
+    # print(f"Processing directories: {file_roots}")
 
     file_paths = []
     for file_dir in file_roots:
@@ -26,6 +28,9 @@ def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data
             print(f"Warning: ディレクトリが見つかりません: {file_dir}")
             continue
         for files in os.listdir(file_dir):
+            # ⬇️ 修正: '._' で始まるファイルは無視する
+            if files.startswith('._'):
+                continue
             if files.endswith('.txt'):
                 file_paths.append(os.path.join(file_dir, files))
     
@@ -145,6 +150,6 @@ def create_label_files(iemo_root='IEMOCAP_full_release', output_dir='output_data
 # --- スクリプト実行 ---
 if __name__ == "__main__":
     create_label_files(
-        iemo_root='IEMOCAP_full_release', 
+        iemo_root=r'/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release', 
         output_dir='output_data'
     )

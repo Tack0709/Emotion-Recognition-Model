@@ -21,6 +21,8 @@ def create_bert_features(
     print(f"使用デバイス: {device}")
 
     # --- 2. 入力ファイル読み込み ---
+    # text_dict.pkl を読み込む
+    # input_dir は create_metadata.py の出力ディレクトリ
     text_dict_path = os.path.join(input_dir, 'text_dict.pkl')
     output_path = os.path.join(output_dir, 'bert-base-diag.npy')
     

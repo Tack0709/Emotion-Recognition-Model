@@ -119,7 +119,7 @@ def create_wav2vec_features(
 # --- スクリプト実行 ---
 if __name__ == "__main__":
     create_wav2vec_features(
-        iemo_root='IEMOCAP_full_release', 
+        iemo_root='/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release', 
         output_dir='output_data',
         model_name='facebook/wav2vec2-base-960h' # 768次元
     )
