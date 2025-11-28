@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import logging
-from transformers import AdamW
+from torch.optim import AdamW
 import copy
 
 from dataloader import get_multimodal_loaders
@@ -112,8 +112,8 @@ if __name__ == '__main__':
         start_time = time.time()
 
         t_loss, t_acc, _, _, t_f1 = train_or_eval_model(model, loss_function, train_loader, e, cuda, args, optimizer, True)
-        v_loss, v_acc, _, _, v_f1 = train_or_eval_model(model, loss_fn=loss_function, dataloader=valid_loader, epoch=e, cuda=cuda, args=args)
-        test_loss, test_acc, _, _, test_f1 = train_or_eval_model(model, loss_fn=loss_function, dataloader=test_loader, epoch=e, cuda=cuda, args=args)
+        v_loss, v_acc, _, _, v_f1 = train_or_eval_model(model, loss_function=loss_function, dataloader=valid_loader, epoch=e, cuda=cuda, args=args)
+        test_loss, test_acc, _, _, test_f1 = train_or_eval_model(model, loss_function=loss_function, dataloader=test_loader, epoch=e, cuda=cuda, args=args)
 
         all_fscore.append([v_f1, test_f1])
 

@@ -44,13 +44,14 @@ def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0,
    
     """
     print('building vocab.. ')
-    speaker_vocab, label_vocab = load_vocab(dataset_name)
+    speaker_vocab, label_vocab = load_vocab(data_dir)
     
     print('building datasets..')
     # 修正: MultimodalDAGDataset を使用
     # 'split'引数に基づき、dataset内部で固定分割が行われる
-    trainset = MultimodalDAGDataset(dataset_name, 'train',  speaker_vocab, args)
-    devset = MultimodalDAGDataset(dataset_name, 'dev', speaker_vocab, args)
+    trainset = MultimodalDAGDataset(split='train', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir)
+    devset = MultimodalDAGDataset(split='dev', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir)
+    testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir)
     
     train_sampler = get_train_valid_sampler(trainset)
     valid_sampler = get_train_valid_sampler(devset)
@@ -70,7 +71,6 @@ def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0,
                               num_workers=num_workers,
                               pin_memory=pin_memory)
 
-    testset = MultimodalDAGDataset(dataset_name, 'test', speaker_vocab, args)
     test_loader = DataLoader(testset,
                              batch_size=batch_size,
                              collate_fn=testset.collate_fn, #
