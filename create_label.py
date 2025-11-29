@@ -22,13 +22,14 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
     
     # print(f"Processing directories: {file_roots}")
 
+    #すべての EmoEvaluation ファイルパスを収集
     file_paths = []
     for file_dir in file_roots:
         if not os.path.exists(file_dir):
             print(f"Warning: ディレクトリが見つかりません: {file_dir}")
             continue
         for files in os.listdir(file_dir):
-            # ⬇️ 修正: '._' で始まるファイルは無視する
+            # 修正: '._' で始まるファイルは無視する
             if files.startswith('._'):
                 continue
             if files.endswith('.txt'):
@@ -62,10 +63,13 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
     current_hard_label = None
     current_soft_labels = []
 
+    #すべての EmoEvaluation ファイルをループ
     for label_path in file_paths:
         try:
+            #一行ずつ解析
             with open(label_path, 'r', encoding='utf-8') as f:
                 for line in f:
+                    # 前後の空白を削除
                     line = line.strip()
                     
                     if not line:
@@ -96,16 +100,27 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
                             current_utt_id = None 
                     
                     # #############################################################
-                    # ⬇️ 修正点: 'C-E' だけでなく 'C-F' や 'C-M' も対象にする
-                    # #############################################################
+                    # 評価者の個別ラベル行 (C-E, C-F, C-M で始まる行)
                     elif (line.startswith('C-E') or line.startswith('C-F') or line.startswith('C-M')) and current_utt_id:
-                        parts = line.split()
-                        # C-F1: Neutral; Anger; () のような行から 'Neutral', 'Anger' を取得
-                        emotion_tags = parts[1].split(';')
-                        
-                        for tag in emotion_tags:
-                            if tag and tag != '()': # 空白や()を除外
-                                current_soft_labels.append(mapping.get(tag, OTHER_VECTOR))
+                        # 1. コロン ':' で分割してデータ部分のみ取得
+                        # 例: "C-F1: Neutral; (curious)" -> " Neutral; (curious)"
+                        if ':' in line:
+                            #最初のコロンで分割
+                            content = line.split(':', 1)[1]
+                            
+                            # 2. セミコロン ';' で分割
+                            # -> [" Neutral", " (curious)"]
+                            emotion_tags = content.split(';')
+                            
+                            for tag in emotion_tags:
+                                tag = tag.strip() # 前後の空白除去
+                                
+                                # 3. 有効なタグか判定
+                                # 空文字、"()"、"("で始まるコメントを除外
+                                if tag and tag != '()' and not tag.startswith('('):
+                                    # マッピングに追加 (Neutral -> [1,0,0,0,0])
+                                    #mappingにないタグは OTHER_VECTOR にマッピング
+                                    current_soft_labels.append(mapping.get(tag, OTHER_VECTOR))
                     # #############################################################
 
         except Exception as e:
