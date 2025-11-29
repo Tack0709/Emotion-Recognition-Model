@@ -6,16 +6,24 @@ from model_utils import * # DAG-ERCのmodel_utils.pyをそのまま使用
 
 # ERC-SLT22 から Bilinear Pooling を導入
 class bilinear_pooling(nn.Module):
+    """
+    低ランク近似を用いたバイリニアプーリング層。
+    テキストと音声の特徴量を融合させる。
+    """
     def __init__(self, text_dim, audio_dim, D=256, O=256): # 入力次元を個別に設定
         super(bilinear_pooling, self).__init__()
+        # 低ランク近似用の射影行列
+        # liner層を使用して、テキストと音声の特徴量をD次元に射影
         self.U1 = nn.Linear(text_dim, D, bias=False)
         self.U2 = nn.Linear(audio_dim, D, bias=False)
         self.P = nn.Linear(D, O)
+        # ショートカット接続用の行列
         self.V1 = nn.Linear(text_dim, O, bias=False)
         self.V2 = nn.Linear(audio_dim, O, bias=False)
         self.output_dim = O
 
     def forward(self, e1, e2): # e1: text (B, N, D_t), e2: audio (B, N, D_a)
+        # 相互作用項 + ショートカット項
         c_ = self.P(torch.sigmoid(self.U1(e1)) * torch.sigmoid(self.U2(e2)))
         c = c_ + self.V1(e1) + self.V2(e2)
         return c

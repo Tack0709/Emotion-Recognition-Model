@@ -14,16 +14,20 @@ def mask_logic(alpha, adj):
 class GAT_dialoggcn_v1(nn.Module):
     '''
     DAG-ERCで使用されるグラフアテンション層 (RGCNタイプ)
+    リレーショナル・グラフ・アテンション・レイヤー。
+    話者関係（Wr0:自分, Wr1:他者）を考慮して情報を集約する。
     '''
     def __init__(self, hidden_size):
         super().__init__()
         self.hidden_size = hidden_size
-        self.linear = nn.Linear(hidden_size * 2, 1)
-        # リレーションごとの変換行列 (Wr0: 自己/他者, Wr1: パディング用)
-        self.Wr0 = nn.Linear(hidden_size, hidden_size, bias = False)
-        self.Wr1 = nn.Linear(hidden_size, hidden_size, bias = False)
+        self.linear = nn.Linear(hidden_size * 2, 1) # QとKの結合からスコアを計算 アテンションスコア計算
+        # リレーションごとの変換行列 (話者関係あり/なし)
+        self.Wr0 = nn.Linear(hidden_size, hidden_size, bias = False) # 話者同一
+        self.Wr1 = nn.Linear(hidden_size, hidden_size, bias = False) # 話者別
 
     def forward(self, Q, K, V, adj, s_mask):
+        # Q(自分)とK(相手)を結合して重要度スコア(alpha)を計算
+        # この重要度スコアに基づいてV(値)を重み付け和する
         '''
         Q: クエリ (現在の発話)
         K, V: キー、バリュー (過去の発話群)
@@ -39,15 +43,17 @@ class GAT_dialoggcn_v1(nn.Module):
         alpha = self.linear(X).permute(0, 2, 1) # (B, 1, N)
         
         # 隣接行列によるマスク
+        # グラフ構造に基づいてマスク
         adj = adj.unsqueeze(1)
         alpha = mask_logic(alpha, adj)
         
         # アテンション重み
-        attn_weight = F.softmax(alpha, dim = 2) # (B, 1, N)
+        attn_weight = F.softmax(alpha, dim = 2) # (B, 1, N) 重要度確率
 
         # リレーション（話者関係）に応じた値の変換
-        V0 = self.Wr0(V) # 関係あり用
-        V1 = self.Wr1(V) # 関係なし用
+        # 話者関係に基づいてV(値)を変換
+        V0 = self.Wr0(V) # 話者同一用
+        V1 = self.Wr1(V) # 話者別用
         
         s_mask = s_mask.unsqueeze(2).float()
         V_transformed = V0 * s_mask + V1 * (1 - s_mask)

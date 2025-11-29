@@ -6,13 +6,14 @@ from transformers import BertTokenizer, BertModel
 from tqdm import tqdm
 import sys
 
-def create_bert_features(
-    input_dir='output_data', 
+def create_bert_features( 
     output_dir='output_data', 
     model_name='bert-base-uncased'
 ):
     """
     text_dict.pkl から発話テキストを読み込み、
+    text_dict.pkl: {発話ID: テキスト} 発話テキスト 順序も同じ
+    text_dict.pkl 内の各発話テキストに対して
     BERTモデルで特徴量を抽出し、bert-base-diag.npy として保存します。
     """
     
@@ -22,8 +23,8 @@ def create_bert_features(
 
     # --- 2. 入力ファイル読み込み ---
     # text_dict.pkl を読み込む
-    # input_dir は create_metadata.py の出力ディレクトリ
-    text_dict_path = os.path.join(input_dir, 'text_dict.pkl')
+    # output_dir は create_metadata.py の出力ディレクトリであり、結果の bert-base-diag.npy もここに保存される
+    text_dict_path = os.path.join(output_dir, 'text_dict.pkl')
     output_path = os.path.join(output_dir, 'bert-base-diag.npy')
     
     if not os.path.exists(text_dict_path):
@@ -32,13 +33,18 @@ def create_bert_features(
         sys.exit(1)
 
     print(f"読み込み中: {text_dict_path}")
+    #rb："Read Binary"（バイナリ読み込み）
     with open(text_dict_path, 'rb') as f:
         text_dict = pickle.load(f)
 
     # --- 3. モデルとトークナイザのロード ---
     print(f"モデルをロード中: {model_name}")
     try:
+        #トークナイザーがテキストをトークンに変換
+        #コンピュータが理解できる数値のテンソルに変換
         tokenizer = BertTokenizer.from_pretrained(model_name)
+        # BERTモデルのロード
+        # モデルは事前学習済みの重み（重みパラメータ）を持つ
         model = BertModel.from_pretrained(model_name).to(device)
         model.eval() # 評価モードに設定
     except Exception as e:
@@ -91,7 +97,6 @@ if __name__ == "__main__":
     # output_data ディレクトリにある text_dict.pkl を読み込み、
     # output_data ディレクトリに bert-base-diag.npy を保存
     create_bert_features(
-        input_dir='output_data', 
         output_dir='output_data',
         model_name='bert-base-uncased' # 'bert-base-uncased' (768次元) を使用
     )

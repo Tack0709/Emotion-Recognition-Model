@@ -34,13 +34,14 @@ def create_wav2vec_features(
     try:
         processor = Wav2Vec2Processor.from_pretrained(model_name)
         model = Wav2Vec2Model.from_pretrained(model_name).to(device)
-        model.eval() # 評価モード
+        model.eval() # 評価モード 逆伝播しない
     except Exception as e:
         print(f"エラー: モデル '{model_name}' のロードに失敗しました。: {e}")
         sys.exit(1)
 
     # --- 3. 処理対象の発話IDリストの取得 ---
     # (修正点: タイムスタンプ 解析を削除し、order.pkl を使用)
+    # order.pkl: {セッションID: [発話IDリスト]} 発話順
     order_path = os.path.join(output_dir, 'order.pkl')
     if not os.path.exists(order_path):
         print(f"エラー: {order_path} が見つかりません。")
@@ -56,14 +57,14 @@ def create_wav2vec_features(
 
     print("Wav2Vec 2.0 特徴量抽出を開始します...")
     
-    with torch.no_grad():
+    with torch.no_grad(): # 勾配計算を無効化してメモリ節約
         # order.pkl の全セッション、全発話をループ
         for session_id, utt_ids in tqdm(order_dic.items(), desc="Processing Sessions"):
             
             # (修正点: セッションWAV のキャッシュは不要)
             
-            for utt_id in utt_ids:
-                # 1. 発話ごとのWAVファイルパスを構築
+            for utt_id in utt_ids: #発話順に取ってくる
+                # 1. 各発話ごとのWAVファイルパスを構築
                 # 例: .../Session1/sentences/wav/Ses01F_impro01/Ses01F_impro01_F000.wav
                 session_num = f"Session{utt_id[4]}" # 'Ses01...' -> 'Session1'
                 wav_path = os.path.join(
@@ -93,8 +94,8 @@ def create_wav2vec_features(
                 inputs = processor(
                     audio_array, 
                     sampling_rate=SAMPLING_RATE, 
-                    return_tensors="pt", 
-                    padding=True
+                    return_tensors="pt",  # PyTorchテンソルで返す
+                    padding=True  # パディングを有効にする
                 ).to(device)
                 
                 outputs = model(**inputs)
@@ -102,6 +103,7 @@ def create_wav2vec_features(
                 # 特徴量 (最終隠れ層の時間軸方向の平均プーリング)
                 feature = outputs.last_hidden_state.mean(dim=1) # (B, Seq, Dim) -> (B, Dim)
                 
+                # squeezeで次元数1のバッチ軸を削除し、CPUに移動してNumPy配列に変換
                 w2v2_features_dic[utt_id] = feature.cpu().numpy().squeeze()
 
     # --- 5. ファイル保存 ---
