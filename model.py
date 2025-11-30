@@ -119,6 +119,7 @@ class DAGERC_multimodal(nn.Module):
             H1 = C+P
             for i in range(1, num_utter):
                 if self.args.attn_type == 'rgcn':
+                    #H1は直前の発話までのかくれ状態が積みあがってる
                     _, M = self.gather[l](H[l][:,i,:], H1, H1, adj[:,i,:i], s_mask[:,i,:i])
                 # (他のGATタイプも同様)
                 # ...
@@ -126,6 +127,7 @@ class DAGERC_multimodal(nn.Module):
                 C = self.grus_c[l](H[l][:,i,:], M).unsqueeze(1)
                 P = self.grus_p[l](M, H[l][:,i,:]).unsqueeze(1)   
                 H_temp = C+P
+                #バッチサイズ×発話数（これの分積みあがる）×隠れ層次元
                 H1 = torch.cat((H1 , H_temp), dim = 1)  
             H.append(H1)
         
