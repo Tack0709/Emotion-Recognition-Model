@@ -138,8 +138,11 @@ class DAGERC_multimodal(nn.Module):
 
         H = self.attentive_node_features(H, lengths, self.nodal_att_type) 
 
-        # 5. 出力
-        logits = self.out_mlp(H) # (B, N, C)
+        # # 5. 出力
+        # logits = self.out_mlp(H) # (B, N, C)
 
-        # NLL (KLDivLoss) のために log_softmax を返す
-        return F.log_softmax(logits, dim=2)
+        # # NLL (KLDivLoss) のために log_softmax を返す
+        # return F.log_softmax(logits, dim=2)
+        
+        # 5. 出力
+        return F.softmax(self.out_mlp(H), dim=2) # (B, N, C)

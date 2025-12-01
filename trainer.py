@@ -33,8 +33,12 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
             s_mask_onehot = s_mask_onehot.cuda()
             lengths = lengths.cuda()
 
-        # 2. モデル実行 (log_softmax が返る)
-        log_prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths) # (B, N, C)
+        # # 2. モデル実行 (log_\softmax が返る)
+        # log_prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths) # (B, N, C)
+        
+        # 2. モデル実行 (softmax が返る)
+        prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths) # (B, N, C)
+        log_prob = torch.log(prob + 1e-10)
         n_classes = log_prob.size(2)
 
         # 3. マスク処理と損失計算 (ソフトラベル対応)
