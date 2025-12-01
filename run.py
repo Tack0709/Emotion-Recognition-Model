@@ -1,10 +1,8 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-import numpy as np, argparse, time, pickle, random
+import numpy as np, argparse, time, random, logging
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import logging
 from torch.optim import AdamW
 import copy
 
@@ -40,14 +38,17 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     
-    # データ設定
     parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
 
-    # 評価指標設定
     parser.add_argument('--eval_metric', type=str, default='f1', choices=['f1', 'loss'], 
                         help='Metric to select best model (f1: Maximize F1, loss: Minimize Loss)')
+    
+    # <--- 追加: 交差検証用のセッションID指定
+    parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5],
+                        help='Session ID to be used as Test data (1-5)')
+
     parser.add_argument('--log_file_name', type=str, default=None, 
-                        help='Name of the log file. If None, generated automatically based on metric and seed.')
+                        help='Name of the log file.')
 
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
@@ -79,37 +80,32 @@ if __name__ == '__main__':
     print(args)
     
     seed_everything(args.seed)
-    
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     
-    # #############################################################
-    # ⬇️ 変更点: ログファイル名にシード値を含めるように修正
-    # #############################################################
+    # <--- 修正: ログファイル名に Fold 番号 (test_session) を含める
     if args.log_file_name:
-        # 指定があればそれを使う
         log_file_path = os.path.join(path, args.log_file_name)
     else:
-        # 指定がなければ自動生成: logging_{指標}_seed{シード値}.log
-        # 例: logging_f1_seed100.log
-        log_file_path = os.path.join(path, f'logging_{args.eval_metric}_seed{args.seed}.log')
+        # 自動生成: logging_{metric}_fold{session}_seed{seed}.log
+        log_file_path = os.path.join(path, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}.log')
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
-    logger.info(f'Start training on {args.data_dir}')
+    logger.info(f'Test Session (Fold): {args.test_session}') # ログ記録
     logger.info(f'Evaluation Metric: {args.eval_metric}')
-    logger.info(f'Seed: {args.seed}') # シード値もログに記録
     logger.info(args)
-    # #############################################################
 
     cuda = args.cuda
     n_epochs = args.epochs
     batch_size = args.batch_size
     
+    # <--- 修正: test_session を渡す
     train_loader, valid_loader, test_loader, speaker_vocab, label_vocab = get_multimodal_loaders(
         data_dir=args.data_dir, 
         batch_size=batch_size, 
         num_workers=0, 
-        args=args
+        args=args,
+        test_session=args.test_session # <--- 追加
     )
     
     n_classes = len(label_vocab['itos'])
@@ -121,7 +117,7 @@ if __name__ == '__main__':
     if cuda:
         model.cuda()
 
-    loss_function = nn.KLDivLoss(reduction='sum')
+    loss_fn = nn.KLDivLoss(reduction='sum')
     optimizer = AdamW(model.parameters() , lr=args.lr)
 
     if args.eval_metric == 'loss':
@@ -138,15 +134,15 @@ if __name__ == '__main__':
 
         # train
         t_loss, t_acc, _, _, t_f1 = train_or_eval_model(
-            model, loss_function, train_loader, e, cuda, args, optimizer, True
+            model, loss_fn, train_loader, e, cuda, args, optimizer, True
         )
         # valid
         v_loss, v_acc, _, _, v_f1 = train_or_eval_model(
-            model, loss_function, valid_loader, e, cuda, args
+            model, loss_fn, valid_loader, e, cuda, args
         )
         # test
         test_loss, test_acc, _, _, test_f1 = train_or_eval_model(
-            model, loss_function, test_loader, e, cuda, args
+            model, loss_fn, test_loader, e, cuda, args
         )
 
         logger.info(
@@ -171,7 +167,7 @@ if __name__ == '__main__':
             best_epoch = e + 1
             best_test_f1 = test_f1
             best_test_loss = test_loss
-            # torch.save(model.state_dict(), os.path.join(path, f'best_model_seed{args.seed}.pt'))
+            # torch.save(model.state_dict(), os.path.join(path, f'best_model_fold{args.test_session}.pt'))
 
     logger.info('finish training!')
     logger.info(f"Best Epoch: {best_epoch}")
