@@ -44,6 +44,10 @@ if __name__ == '__main__':
     # データセットディレクトリ指定 (dataset_nameの代わりにこれを使う)
     parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
 
+    # Training params評価指標の選択
+    parser.add_argument('--eval_metric', type=str, default='f1', choices=['f1', 'loss'], 
+                        help='Metric to select best model (f1: Maximize F1, loss: Minimize NLL)')
+    
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
     parser.add_argument('--mlp_layers', type=int, default=2, help='Number of output mlp layers.')
@@ -103,24 +107,66 @@ if __name__ == '__main__':
     if cuda:
         model.cuda()
 
-    loss_function = nn.KLDivLoss(reduction='sum')
+    loss_fn = nn.KLDivLoss(reduction='sum')
     optimizer = AdamW(model.parameters() , lr=args.lr)
 
+    if args.eval_metric == 'loss':
+        best_val_score = float('inf')
+    else:
+        best_val_score = 0.0
+        
+    best_test_score_at_best_val = 0.0 # F1スコア記録用
+    best_test_loss_at_best_val = float('inf') # Loss記録用
+    
     all_fscore = []
 
-    for e in range(n_epochs):
-        start_time = time.time()
+    for e in range(args.epochs):
+        start = time.time()
+        
+        t_loss, t_acc, _, _, t_f1 = train_or_eval_model(model, loss_fn, train_loader, e, args.cuda, args, optimizer, True)
+        v_loss, v_acc, _, _, v_f1 = train_or_eval_model(model, loss_fn, valid_loader, e, args.cuda, args)
+        test_loss, test_acc, _, _, test_f1 = train_or_eval_model(model, loss_fn, test_loader, e, args.cuda, args)
 
-        t_loss, t_acc, _, _, t_f1 = train_or_eval_model(model, loss_function, train_loader, e, cuda, args, optimizer, True)
-        v_loss, v_acc, _, _, v_f1 = train_or_eval_model(model, loss_function=loss_function, dataloader=valid_loader, epoch=e, cuda=cuda, args=args)
-        test_loss, test_acc, _, _, test_f1 = train_or_eval_model(model, loss_function=loss_function, dataloader=test_loader, epoch=e, cuda=cuda, args=args)
+        # <--- 追加: ログにLossとF1の両方を表示
+        logger.info(
+            f"Ep {e+1}: "
+            f"Train [Loss {t_loss:.4f} F1 {t_f1:.2f}] | "
+            f"Val [Loss {v_loss:.4f} F1 {v_f1:.2f}] | "
+            f"Test [Loss {test_loss:.4f} F1 {test_f1:.2f}] | "
+            f"Time {time.time()-start:.1f}s"
+        )
 
-        all_fscore.append([v_f1, test_f1])
-
-        logger.info( 'Epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, valid_loss: {}, valid_acc: {}, valid_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {} sec'. \
-            format(e + 1, t_loss, t_acc, t_f1, v_loss, v_acc, v_f1, test_loss, test_acc, test_f1, round(time.time() - start_time, 2)))
+        # -----------------------------------------------------------------
+        # <--- 変更: ベストモデルの更新判定ロジック
+        # -----------------------------------------------------------------
+        update_best = False
+        if args.eval_metric == 'loss':
+            # Lossが小さいほど良い
+            if v_loss < best_val_score:
+                best_val_score = v_loss
+                update_best = True
+        else:
+            # F1が大きいほど良い (デフォルト)
+            if v_f1 > best_val_score:
+                best_val_score = v_f1
+                update_best = True
+        
+        if update_best:
+            # ベスト更新時のテストスコアを記録
+            best_test_score_at_best_val = test_f1
+            best_test_loss_at_best_val = test_loss
+            
+            # (必要ならここで torch.save(model.state_dict(), ...) でモデル保存)
 
     logger.info('finish training!')
-    all_fscore = sorted(all_fscore, key=lambda x: x[0], reverse=True) # Valid基準
-    logger.info('Best Val F1: {}'.format(all_fscore[0][1]))
-    logger.info('Best Test F1 (at Best Val): {}'.format(all_fscore[0][1])) # all_fscore[0][1] is Test F1 when Val F1 is max
+    
+    # -----------------------------------------------------------------
+    # <--- 変更: 最終結果の表示
+    # -----------------------------------------------------------------
+    if args.eval_metric == 'loss':
+        logger.info(f"Best Val Loss: {best_val_score:.4f}")
+        logger.info(f"Test Loss at Best Val: {best_test_loss_at_best_val:.4f}")
+        logger.info(f"Test F1 at Best Val: {best_test_score_at_best_val:.2f}")
+    else:
+        logger.info(f"Best Val F1: {best_val_score:.2f}")
+        logger.info(f"Test F1 at Best Val: {best_test_score_at_best_val:.2f}")
