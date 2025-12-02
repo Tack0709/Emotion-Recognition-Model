@@ -3,3 +3,4 @@
 *.log
 __pycache__/
 npy_text_results/
+saved_models/

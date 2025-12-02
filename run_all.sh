@@ -22,7 +22,7 @@ for i in {1..5}
 do
     echo ""
     echo "--- Running Fold $i (Test Session $i) ---"
-    python run.py --test_session $i --eval_metric loss --epochs 100
+    python run.py --test_session $i --eval_metric loss --epochs 100 --lr 5e-5 --seed 42
 done
 
 # --- 3. 結果の集計 ---
