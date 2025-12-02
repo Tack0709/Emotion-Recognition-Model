@@ -1,106 +1,81 @@
-import numpy as np, argparse, time, pickle, random
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, classification_report, \
-    precision_recall_fscore_support
-from tqdm import tqdm
-import json
+import torch, numpy as np
+from sklearn.metrics import f1_score, accuracy_score
 
 def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, optimizer=None, train=False):
-    losses, preds, labels = [], [], []
+    if train: model.train()
+    else: model.eval()
     
-    assert not train or optimizer != None
-    if train:
-        model.train()
-    else:
-        model.eval()
-
+    losses = []     # KL損失（学習用）
+    nll_losses = [] # NLL損失（比較・評価用） <--- 追加
+    preds, labels = [], []
+    
     for data in dataloader:
-        if train:
-            optimizer.zero_grad()
+        f_t, f_a, l_s, adj, mask, mask_oh, lens, _, _ = data
+        if f_t is None: continue
         
-        # 1. データのアンパック (dataset.py の collate_fn に合わせる)
-        features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances = data
-
         if cuda:
-            features_text = features_text.cuda()
-            features_audio = features_audio.cuda()
-            labels_soft = labels_soft.cuda()
-            adj = adj.cuda()
-            s_mask = s_mask.cuda()
-            s_mask_onehot = s_mask_onehot.cuda()
-            lengths = lengths.cuda()
-
-        # # 2. モデル実行 (log_\softmax が返る)
-        # log_prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths) # (B, N, C)
+            f_t, f_a, l_s, adj, mask, mask_oh, lens = f_t.cuda(), f_a.cuda(), l_s.cuda(), adj.cuda(), mask.cuda(), mask_oh.cuda(), lens.cuda()
         
-        # 2. モデル実行 (softmax が返る)
-        prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths) # (B, N, C)
+        if train: optimizer.zero_grad()
+        
+        # 1. モデル出力 (確率分布)
+        prob = model(f_t, f_a, adj, mask, mask_oh, lens)
+        
+        # 2. 対数確率に変換
         log_prob = torch.log(prob + 1e-10)
-        n_classes = log_prob.size(2)
 
-        # 3. マスク処理と損失計算 (ソフトラベル対応)
-        # labels_soft のパディング値は -1.0
-        # (B, N, C) -> (B, N) マスク作成 (どれか一つでも -1 ならマスク)
-        mask = (labels_soft.select(2, 0) != -1.0).unsqueeze(2) # (B, N, 1)
-
-        # マスクを適用 (B*N, C)
-        log_prob_masked = log_prob.masked_select(mask).view(-1, n_classes)
-        labels_soft_masked = labels_soft.masked_select(mask).view(-1, n_classes)
+        # 3. マスク作成
+        valid_mask = (l_s.select(2, 0) != -1.0).unsqueeze(2)
         
-        # 4. 損失計算 (KLDivLoss)
-        # loss_function は run.py で nn.KLDivLoss(reduction='sum') として定義
-        loss = loss_function(log_prob_masked, labels_soft_masked)
+        # --- 損失の計算 ---
         
-        # 発話数で正規化
-        num_utterances = mask.sum()
-        if num_utterances > 0:
-            loss = loss / num_utterances
+        # A. KLダイバージェンス (学習用: 予測と正解の「距離」)
+        # PyTorchのKLDivLossは「log_prob」と「prob(正解)」を受け取る
+        loss_kl = loss_function(
+            log_prob.masked_select(valid_mask).view(-1, 5), 
+            l_s.masked_select(valid_mask).view(-1, 5)
+        )
         
-        # 5. 評価指標のための変換
-        # 予測 (ハードラベル)
-        pred = torch.argmax(log_prob, dim=2).cpu().numpy().tolist() # (B, N)
-        # 正解 (ソフトラベル -> ハードラベル)
-        # (注: パディング箇所 (-1) は argmax でも問題ない値 (-1 or 0) になるはずだが、後でマスクするのでOK)
-        label_hard = torch.argmax(labels_soft, dim=2).cpu().numpy().tolist() # (B, N)
+        # B. NLL / クロスエントロピー (比較用: -sum(P * logQ)) <--- 追加
+        # 手動で計算するのが確実です: - Σ (正解 * log(予測))
+        # マスクされたデータだけを取り出して計算
+        selected_log_prob = log_prob.masked_select(valid_mask).view(-1, 5)
+        selected_target = l_s.masked_select(valid_mask).view(-1, 5)
         
-        # パディング除外用の正解ラベル (DAG-ERC と同様)
-        # labels_soft が (-1, -1, ...) の場合、label_hard は 0 になる。
-        # 正確なマスクのために、-1 でパディングされたハードラベルも用意する
-        label_hard_padded = torch.where(
-            labels_soft.sum(dim=2) < -0.5, # パディング (-1*C) かどうか
-            torch.tensor(-1, device=labels_soft.device, dtype=torch.long),
-            torch.argmax(labels_soft, dim=2)
-        ).cpu().numpy().tolist()
-
-
-        preds += pred
-        labels += label_hard_padded # パディング(-1)を含むハードラベル
-        losses.append(loss.item())
-
+        # 要素ごとの積をとって合計し、マイナスをかける
+        loss_nll = -torch.sum(selected_target * selected_log_prob)
+        
+        # 正規化 (発話数で割る)
+        num_valid = valid_mask.sum()
+        if num_valid > 0:
+            loss_kl = loss_kl / num_valid
+            loss_nll = loss_nll / num_valid # <--- 追加
+        else:
+            loss_kl = torch.tensor(0.0).to(loss_kl.device)
+            loss_nll = torch.tensor(0.0).to(loss_kl.device) # <--- 追加
+        
         if train:
-            loss.backward()
+            loss_kl.backward() # 学習はKLで行う（勾配はNLLと同じなのでOK）
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
             optimizer.step()
-
-    if preds != []:
-        new_preds = []
-        new_labels = []
-        # DAG-ERC と同じパディング除外ロジック
-        for i, label in enumerate(labels):
-            for j, l in enumerate(label):
+            
+        losses.append(loss_kl.item())
+        nll_losses.append(loss_nll.item()) # <--- 追加
+        
+        # 評価用データ蓄積
+        p_hard = torch.argmax(prob, 2)
+        l_hard_padded = torch.where(l_s.sum(2) < -0.5, torch.tensor(-1).to(l_s.device), torch.argmax(l_s, 2))
+        
+        for i, l_seq in enumerate(l_hard_padded.cpu().tolist()):
+            for j, l in enumerate(l_seq):
                 if l != -1:
-                    new_labels.append(l)
-                    new_preds.append(preds[i][j])
-    else:
-        return float('nan'), float('nan'), [], [], float('nan')
+                    labels.append(l)
+                    preds.append(p_hard[i][j].item())
 
-    avg_loss = round(np.sum(losses) / len(losses), 4)
-    avg_accuracy = round(accuracy_score(new_labels, new_preds) * 100, 2)
+    avg_loss_kl = np.mean(losses) if losses else 0.0
+    avg_loss_nll = np.mean(nll_losses) if nll_losses else 0.0 # <--- 追加
+    f1 = f1_score(labels, preds, average='weighted', labels=list(range(5))) * 100 if labels else 0.0
     
-    # 5クラス (0-4) の F1スコア
-    avg_fscore = round(f1_score(new_labels, new_preds, average='weighted', labels=list(range(5))) * 100, 2)
-    
-    return avg_loss, avg_accuracy, labels, preds, avg_fscore
+    # 戻り値に NLL を追加して返す
+    # (KL, NLL, Accuracy(今回は0), labels, preds, F1)
+    return avg_loss_kl, avg_loss_nll, 0.0, labels, preds, f1

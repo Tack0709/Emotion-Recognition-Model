@@ -40,41 +40,39 @@ if __name__ == '__main__':
     
     parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
 
-    parser.add_argument('--eval_metric', type=str, default='f1', choices=['f1', 'loss'], 
-                        help='Metric to select best model (f1: Maximize F1, loss: Minimize Loss)')
-    
-    # <--- 追加: 交差検証用のセッションID指定
-    parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5],
-                        help='Session ID to be used as Test data (1-5)')
-
+    # <--- 変更: デフォルトを 'loss' (NLL) に変更
+    parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss'], 
+                        help='Metric to select best model (f1: Maximize F1, loss: Minimize NLL)')
     parser.add_argument('--log_file_name', type=str, default=None, 
                         help='Name of the log file.')
+    
+    parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5])
 
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
-    parser.add_argument('--mlp_layers', type=int, default=2, help='Number of output mlp layers.')
-    parser.add_argument('--gnn_layers', type=int, default=4, help='Number of gnn layers.')
-    parser.add_argument('--attn_type', type=str, default='rgcn', choices=['dotprod','linear','bilinear', 'rgcn'], help='Feature size.')
-    parser.add_argument('--no_rel_attn',  action='store_true', default=False, help='no relation for edges' )
-    parser.add_argument('--no_cuda', action='store_true', default=False, help='does not use GPU')
+    parser.add_argument('--mlp_layers', type=int, default=2)
+    parser.add_argument('--gnn_layers', type=int, default=4)
+    parser.add_argument('--attn_type', type=str, default='rgcn', choices=['dotprod','linear','bilinear', 'rgcn'])
+    parser.add_argument('--no_rel_attn',  action='store_true')
     parser.add_argument('--windowp', type=int, default=1)
     parser.add_argument('--windowf', type=int, default=0)
-    parser.add_argument('--max_grad_norm', type=float, default=5.0, help='Gradient clipping.')
-    parser.add_argument('--lr', type=float, default=1e-4, metavar='LR', help='learning rate')
-    parser.add_argument('--dropout', type=float, default=0.2, metavar='dropout', help='dropout rate')
-    parser.add_argument('--batch_size', type=int, default=16, metavar='BS', help='batch size')
-    parser.add_argument('--epochs', type=int, default=50, metavar='E', help='number of epochs')
-    parser.add_argument('--tensorboard', action='store_true', default=False)
+    parser.add_argument('--max_grad_norm', type=float, default=5.0)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--dropout', type=float, default=0.2)
+    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--tensorboard', action='store_true')
     parser.add_argument('--nodal_att_type', type=str, default=None, choices=['global','past'])
 
     # Dimensions
-    parser.add_argument('--text_dim', type=int, default=768, help='Text feature dimension (BERT-base)')
-    parser.add_argument('--audio_dim', type=int, default=768, help='Audio feature dimension (Wav2Vec 2.0-base)')
-    parser.add_argument('--fusion_dim_D', type=int, default=256, help='Bilinear D dim')
-    parser.add_argument('--fusion_dim_O', type=int, default=512, help='Bilinear Output dim (to fc1)')
+    parser.add_argument('--text_dim', type=int, default=768)
+    parser.add_argument('--audio_dim', type=int, default=768)
+    parser.add_argument('--fusion_dim_D', type=int, default=256)
+    parser.add_argument('--fusion_dim_O', type=int, default=512)
 
     parser.add_argument('--dataset_name', default='IEMOCAP', type=str)
     parser.add_argument('--seed', type=int, default=100)
+    parser.add_argument('--no_cuda', action='store_true')
 
     args = parser.parse_args()
     print(args)
@@ -82,16 +80,15 @@ if __name__ == '__main__':
     seed_everything(args.seed)
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     
-    # <--- 修正: ログファイル名に Fold 番号 (test_session) を含める
     if args.log_file_name:
         log_file_path = os.path.join(path, args.log_file_name)
     else:
-        # 自動生成: logging_{metric}_fold{session}_seed{seed}.log
+        # デフォルト名も loss になる
         log_file_path = os.path.join(path, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}.log')
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
-    logger.info(f'Test Session (Fold): {args.test_session}') # ログ記録
+    logger.info(f'Test Session (Fold): {args.test_session}')
     logger.info(f'Evaluation Metric: {args.eval_metric}')
     logger.info(args)
 
@@ -99,13 +96,12 @@ if __name__ == '__main__':
     n_epochs = args.epochs
     batch_size = args.batch_size
     
-    # <--- 修正: test_session を渡す
     train_loader, valid_loader, test_loader, speaker_vocab, label_vocab = get_multimodal_loaders(
         data_dir=args.data_dir, 
         batch_size=batch_size, 
         num_workers=0, 
         args=args,
-        test_session=args.test_session # <--- 追加
+        test_session=args.test_session
     )
     
     n_classes = len(label_vocab['itos'])
@@ -120,45 +116,46 @@ if __name__ == '__main__':
     loss_fn = nn.KLDivLoss(reduction='sum')
     optimizer = AdamW(model.parameters() , lr=args.lr)
 
+    # NLL最小化のための初期化 (default='loss' なのでこちらが動く)
     if args.eval_metric == 'loss':
         best_val_score = float('inf')
     else:
         best_val_score = -float('inf')
         
     best_test_f1 = 0.0
-    best_test_loss = 0.0
+    best_test_nll = 0.0 
     best_epoch = -1
 
     for e in range(n_epochs):
         start_time = time.time()
 
-        # train
-        t_loss, t_acc, _, _, t_f1 = train_or_eval_model(
+        # 6つの戻り値を受け取る
+        t_kl, t_nll, t_acc, _, _, t_f1 = train_or_eval_model(
             model, loss_fn, train_loader, e, cuda, args, optimizer, True
         )
-        # valid
-        v_loss, v_acc, _, _, v_f1 = train_or_eval_model(
+        v_kl, v_nll, v_acc, _, _, v_f1 = train_or_eval_model(
             model, loss_fn, valid_loader, e, cuda, args
         )
-        # test
-        test_loss, test_acc, _, _, test_f1 = train_or_eval_model(
+        test_kl, test_nll, test_acc, _, _, test_f1 = train_or_eval_model(
             model, loss_fn, test_loader, e, cuda, args
         )
 
         logger.info(
             f"Ep {e+1}: "
-            f"Train [Loss {t_loss:.4f} F1 {t_f1:.2f}] | "
-            f"Val [Loss {v_loss:.4f} F1 {v_f1:.2f}] | "
-            f"Test [Loss {test_loss:.4f} F1 {test_f1:.2f}] | "
+            f"Train [NLL {t_nll:.4f} F1 {t_f1:.2f}] | "
+            f"Val [NLL {v_nll:.4f} F1 {v_f1:.2f}] | "
+            f"Test [NLL {test_nll:.4f} F1 {test_f1:.2f}] | "
             f"Time {time.time() - start_time:.1f}s"
         )
 
         is_best = False
         if args.eval_metric == 'loss':
-            if v_loss < best_val_score:
-                best_val_score = v_loss
+            # NLLが小さいほど良い
+            if v_nll < best_val_score:
+                best_val_score = v_nll
                 is_best = True
         else:
+            # F1が大きいほど良い
             if v_f1 > best_val_score:
                 best_val_score = v_f1
                 is_best = True
@@ -166,16 +163,15 @@ if __name__ == '__main__':
         if is_best:
             best_epoch = e + 1
             best_test_f1 = test_f1
-            best_test_loss = test_loss
-            # torch.save(model.state_dict(), os.path.join(path, f'best_model_fold{args.test_session}.pt'))
+            best_test_nll = test_nll
 
     logger.info('finish training!')
     logger.info(f"Best Epoch: {best_epoch}")
     
     if args.eval_metric == 'loss':
-        logger.info(f"Best Val Loss: {best_val_score:.4f}")
+        logger.info(f"Best Val NLL: {best_val_score:.4f}")
     else:
         logger.info(f"Best Val F1: {best_val_score:.2f}")
 
     logger.info(f"Test F1 at Best Val: {best_test_f1:.2f}")
-    logger.info(f"Test Loss at Best Val: {best_test_loss:.4f}")
+    logger.info(f"Test NLL at Best Val: {best_test_nll:.4f}")
