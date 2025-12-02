@@ -100,26 +100,16 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
                             current_utt_id = None 
                     
                     # #############################################################
-                    # 評価者の個別ラベル行 (C-E, C-F, C-M で始まる行)
-                    elif (line.startswith('C-E') or line.startswith('C-F') or line.startswith('C-M')) and current_utt_id:
-                        # 1. コロン ':' で分割してデータ部分のみ取得
-                        # 例: "C-F1: Neutral; (curious)" -> " Neutral; (curious)"
-                        if ':' in line:
-                            #最初のコロンで分割
-                            content = line.split(':', 1)[1]
-                            
-                            # 2. セミコロン ';' で分割
-                            # -> [" Neutral", " (curious)"]
-                            emotion_tags = content.split(';')
-                            
+                    # ⬇️ 修正: 'C-E' で始まる行（第三者評価）のみを対象にする
+                    # #############################################################
+                    elif line.startswith('C-E') and current_utt_id:
+                        parts = line.split()
+                        if len(parts) > 1:
+                            # セミコロン区切りの感情タグを取得
+                            emotion_tags = parts[1].split(';')
                             for tag in emotion_tags:
-                                tag = tag.strip() # 前後の空白除去
-                                
-                                # 3. 有効なタグか判定
-                                # 空文字、"()"、"("で始まるコメントを除外
-                                if tag and tag != '()' and not tag.startswith('('):
-                                    # マッピングに追加 (Neutral -> [1,0,0,0,0])
-                                    #mappingにないタグは OTHER_VECTOR にマッピング
+                                tag = tag.strip()
+                                if tag and tag != '()':
                                     current_soft_labels.append(mapping.get(tag, OTHER_VECTOR))
                     # #############################################################
 
