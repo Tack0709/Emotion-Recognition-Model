@@ -4,6 +4,8 @@ import numpy as np, argparse, time, random, logging
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
+# <--- 追加: スケジューラ用
+from transformers import get_linear_schedule_with_warmup
 import copy
 
 from dataloader import get_multimodal_loaders
@@ -32,21 +34,16 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
 
 if __name__ == '__main__':
-
     path = './saved_models/'
     if not os.path.exists(path): os.makedirs(path)
 
     parser = argparse.ArgumentParser()
     
     parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
-
-    # <--- 変更: デフォルトを 'loss' (NLL) に変更
     parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss'], 
                         help='Metric to select best model (f1: Maximize F1, loss: Minimize NLL)')
-    parser.add_argument('--log_file_name', type=str, default=None, 
-                        help='Name of the log file.')
-    
     parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5])
+    parser.add_argument('--log_file_name', type=str, default=None, help='Name of the log file.')
 
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
@@ -83,7 +80,6 @@ if __name__ == '__main__':
     if args.log_file_name:
         log_file_path = os.path.join(path, args.log_file_name)
     else:
-        # デフォルト名も loss になる
         log_file_path = os.path.join(path, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}.log')
 
     logger = get_logger(log_file_path)
@@ -109,14 +105,24 @@ if __name__ == '__main__':
 
     print('building model..')
     model = DAGERC_multimodal(args, n_classes)
-
-    if cuda:
-        model.cuda()
+    if cuda: model.cuda()
 
     loss_fn = nn.KLDivLoss(reduction='sum')
-    optimizer = AdamW(model.parameters() , lr=args.lr)
+    
+    # <--- 修正: Weight Decay (0.01) を追加
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
 
-    # NLL最小化のための初期化 (default='loss' なのでこちらが動く)
+    # <--- 追加: スケジューラの設定
+    num_training_steps = len(train_loader) * args.epochs
+    num_warmup_steps = int(num_training_steps * 0.1) # 10%をウォームアップに使用
+    
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, 
+        num_warmup_steps=num_warmup_steps, 
+        num_training_steps=num_training_steps
+    )
+    logger.info(f"Total training steps: {num_training_steps}, Warmup steps: {num_warmup_steps}")
+
     if args.eval_metric == 'loss':
         best_val_score = float('inf')
     else:
@@ -129,13 +135,19 @@ if __name__ == '__main__':
     for e in range(n_epochs):
         start_time = time.time()
 
-        # 6つの戻り値を受け取る
+        # Train: scheduler を渡す
         t_kl, t_nll, t_acc, _, _, t_f1 = train_or_eval_model(
-            model, loss_fn, train_loader, e, cuda, args, optimizer, True
+            model, loss_fn, train_loader, e, cuda, args, optimizer, 
+            scheduler=scheduler, # <--- 追加
+            train=True
         )
+        
+        # Valid
         v_kl, v_nll, v_acc, _, _, v_f1 = train_or_eval_model(
             model, loss_fn, valid_loader, e, cuda, args
         )
+        
+        # Test
         test_kl, test_nll, test_acc, _, _, test_f1 = train_or_eval_model(
             model, loss_fn, test_loader, e, cuda, args
         )
@@ -150,12 +162,10 @@ if __name__ == '__main__':
 
         is_best = False
         if args.eval_metric == 'loss':
-            # NLLが小さいほど良い
             if v_nll < best_val_score:
                 best_val_score = v_nll
                 is_best = True
         else:
-            # F1が大きいほど良い
             if v_f1 > best_val_score:
                 best_val_score = v_f1
                 is_best = True
