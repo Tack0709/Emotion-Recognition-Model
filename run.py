@@ -1,17 +1,23 @@
 import os
+# GPUを指定
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-import numpy as np, argparse, time, random, logging
+
+import numpy as np
+import argparse
+import time
+import random
+import logging
 import torch
 import torch.nn as nn
-from torch.optim import AdamW
-# <--- 追加: スケジューラ用
-from transformers import get_linear_schedule_with_warmup
+from torch.optim import AdamW 
 import copy
 
+# 自作モジュールのインポート
 from dataloader import get_multimodal_loaders
 from model import DAGERC_multimodal
 from trainer import train_or_eval_model
 
+# --- ロガーの設定 ---
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
     formatter = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s")
@@ -24,6 +30,7 @@ def get_logger(filename, verbosity=1, name=None):
     sh.setFormatter(formatter)
     return logger
 
+# --- シード固定 ---
 def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -33,43 +40,69 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
+# ##################################################################
+# <--- 追加: ソフトラベル対応のNLL損失関数
+# ##################################################################
+class SoftNLLLoss(nn.Module):
+    def __init__(self, reduction='sum'):
+        super().__init__()
+        self.reduction = reduction
+
+    def forward(self, log_probs, targets):
+        """
+        log_probs: 対数確率 (B, C)
+        targets: 正解確率分布 (B, C)
+        """
+        # NLL = - sum( P(x) * log Q(x) )
+        loss = -torch.sum(targets * log_probs, dim=1)
+        
+        if self.reduction == 'sum':
+            return loss.sum()
+        elif self.reduction == 'mean':
+            return loss.mean()
+        return loss
+# ##################################################################
+
 if __name__ == '__main__':
+
     path = './saved_models/'
-    if not os.path.exists(path): os.makedirs(path)
+    if not os.path.exists(path): 
+        os.makedirs(path)
 
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
-    parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss'], 
-                        help='Metric to select best model (f1: Maximize F1, loss: Minimize NLL)')
+    # データ・評価設定
+    parser.add_argument('--data_dir', default='output_data', type=str)
+    parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss']) # デフォルトをlossに
     parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5])
-    parser.add_argument('--log_file_name', type=str, default=None, help='Name of the log file.')
+    parser.add_argument('--log_file_name', type=str, default=None)
 
-    # GNN & Model params
+    # モデルパラメータ
     parser.add_argument('--hidden_dim', type=int, default=300)
     parser.add_argument('--mlp_layers', type=int, default=2)
     parser.add_argument('--gnn_layers', type=int, default=4)
-    parser.add_argument('--attn_type', type=str, default='rgcn', choices=['dotprod','linear','bilinear', 'rgcn'])
-    parser.add_argument('--no_rel_attn',  action='store_true')
+    parser.add_argument('--attn_type', type=str, default='rgcn')
+    parser.add_argument('--no_rel_attn', action='store_true')
     parser.add_argument('--windowp', type=int, default=1)
     parser.add_argument('--windowf', type=int, default=0)
-    parser.add_argument('--max_grad_norm', type=float, default=5.0)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--dropout', type=float, default=0.2)
-    parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--tensorboard', action='store_true')
-    parser.add_argument('--nodal_att_type', type=str, default=None, choices=['global','past'])
-
-    # Dimensions
+    parser.add_argument('--nodal_att_type', type=str, default=None)
+    
+    # 次元数 (768)
     parser.add_argument('--text_dim', type=int, default=768)
     parser.add_argument('--audio_dim', type=int, default=768)
     parser.add_argument('--fusion_dim_D', type=int, default=256)
     parser.add_argument('--fusion_dim_O', type=int, default=512)
 
-    parser.add_argument('--dataset_name', default='IEMOCAP', type=str)
+    # 学習パラメータ
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--dropout', type=float, default=0.2)
+    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--max_grad_norm', type=float, default=5.0)
     parser.add_argument('--seed', type=int, default=100)
     parser.add_argument('--no_cuda', action='store_true')
+    parser.add_argument('--tensorboard', action='store_true')
+    parser.add_argument('--dataset_name', default='IEMOCAP', type=str)
 
     args = parser.parse_args()
     print(args)
@@ -84,8 +117,7 @@ if __name__ == '__main__':
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
-    logger.info(f'Test Session (Fold): {args.test_session}')
-    logger.info(f'Evaluation Metric: {args.eval_metric}')
+    logger.info(f'Test Session: {args.test_session}')
     logger.info(args)
 
     cuda = args.cuda
@@ -101,27 +133,16 @@ if __name__ == '__main__':
     )
     
     n_classes = len(label_vocab['itos'])
-    print('n_classes:', n_classes)
-
-    print('building model..')
     model = DAGERC_multimodal(args, n_classes)
-    if cuda: model.cuda()
 
-    loss_fn = nn.KLDivLoss(reduction='sum')
-    
-    # <--- 修正: Weight Decay (0.01) を追加
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
+    if cuda:
+        model.cuda()
 
-    # <--- 追加: スケジューラの設定
-    num_training_steps = len(train_loader) * args.epochs
-    num_warmup_steps = int(num_training_steps * 0.1) # 10%をウォームアップに使用
-    
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, 
-        num_warmup_steps=num_warmup_steps, 
-        num_training_steps=num_training_steps
-    )
-    logger.info(f"Total training steps: {num_training_steps}, Warmup steps: {num_warmup_steps}")
+    # #############################################################
+    # ⬇️ 変更点: 損失関数を KLDivLoss から SoftNLLLoss に変更
+    # #############################################################
+    loss_fn = SoftNLLLoss(reduction='sum') # <--- 変更
+    optimizer = AdamW(model.parameters() , lr=args.lr)
 
     if args.eval_metric == 'loss':
         best_val_score = float('inf')
@@ -129,43 +150,45 @@ if __name__ == '__main__':
         best_val_score = -float('inf')
         
     best_test_f1 = 0.0
-    best_test_nll = 0.0 
+    best_test_nll = 0.0
     best_epoch = -1
 
     for e in range(n_epochs):
         start_time = time.time()
 
-        # Train: scheduler を渡す
-        t_kl, t_nll, t_acc, _, _, t_f1 = train_or_eval_model(
-            model, loss_fn, train_loader, e, cuda, args, optimizer, 
-            scheduler=scheduler, # <--- 追加
-            train=True
+        # train
+        # 戻り値の t_loss は NLL そのものになります
+        t_loss, _, t_acc, _, _, t_f1 = train_or_eval_model(
+            model, loss_fn, train_loader, e, cuda, args, optimizer, True
         )
         
-        # Valid
-        v_kl, v_nll, v_acc, _, _, v_f1 = train_or_eval_model(
+        # valid
+        v_loss, _, v_acc, _, _, v_f1 = train_or_eval_model(
             model, loss_fn, valid_loader, e, cuda, args
         )
         
-        # Test
-        test_kl, test_nll, test_acc, _, _, test_f1 = train_or_eval_model(
+        # test
+        test_loss, _, test_acc, _, _, test_f1 = train_or_eval_model(
             model, loss_fn, test_loader, e, cuda, args
         )
 
+        # ログ出力 (すべて NLL)
         logger.info(
             f"Ep {e+1}: "
-            f"Train [NLL {t_nll:.4f} F1 {t_f1:.2f}] | "
-            f"Val [NLL {v_nll:.4f} F1 {v_f1:.2f}] | "
-            f"Test [NLL {test_nll:.4f} F1 {test_f1:.2f}] | "
+            f"Train [NLL {t_loss:.4f} F1 {t_f1:.2f}] | "
+            f"Val [NLL {v_loss:.4f} F1 {v_f1:.2f}] | "
+            f"Test [NLL {test_loss:.4f} F1 {test_f1:.2f}] | "
             f"Time {time.time() - start_time:.1f}s"
         )
 
         is_best = False
         if args.eval_metric == 'loss':
-            if v_nll < best_val_score:
-                best_val_score = v_nll
+            # NLL最小化
+            if v_loss < best_val_score:
+                best_val_score = v_loss
                 is_best = True
         else:
+            # F1最大化
             if v_f1 > best_val_score:
                 best_val_score = v_f1
                 is_best = True
@@ -173,7 +196,7 @@ if __name__ == '__main__':
         if is_best:
             best_epoch = e + 1
             best_test_f1 = test_f1
-            best_test_nll = test_nll
+            best_test_nll = test_loss # test_loss が NLL
 
     logger.info('finish training!')
     logger.info(f"Best Epoch: {best_epoch}")
