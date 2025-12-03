@@ -7,15 +7,16 @@ import random
 import os
 
 class MultimodalDAGDataset(Dataset):
-    # <--- 修正: test_session 引数を追加 (デフォルトは5)
-    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.2, test_session=5):
+    # <--- 修正: nma 引数を追加 (デフォルトFalse)
+    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5, nma=False):
         self.speaker_vocab = speaker_vocab
         self.args = args
+        self.nma = nma # <--- フラグを保存
         
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
 
-        # print(f"Loading {split} data from {data_dir} (Test Session: {test_session})...")
+        print(f"Loading {split} data from {data_dir} (NMA: {self.nma})...")
 
         self.bert_features = np.load(os.path.join(data_dir, 'bert-base-diag.npy'), allow_pickle=True).item()
         self.w2v2_features = np.load(os.path.join(data_dir, 'w2v2-ft-diag.npy'), allow_pickle=True).item()
@@ -32,12 +33,10 @@ class MultimodalDAGDataset(Dataset):
         else:
             self.text_dict = {}
 
-        # --- 修正: 交差検証用の分割ロジック ---
         all_session_ids = sorted(list(self.order.keys()))
         train_sessions = []
         test_sessions = []
         
-        # 指定された test_session (例: 1 -> "Ses01") をテスト用にする
         target_test_prefix = f"Ses0{test_session}"
 
         for ses_id in all_session_ids:
@@ -46,7 +45,6 @@ class MultimodalDAGDataset(Dataset):
             else:
                 train_sessions.append(ses_id)
         
-        # 学習データをシャッフルして一部を検証データ(Dev)にする
         random.seed(args.seed if args else 42)
         random.shuffle(train_sessions)
         dev_size = int(len(train_sessions) * dev_ratio)
@@ -63,7 +61,6 @@ class MultimodalDAGDataset(Dataset):
             raise ValueError(f"Unknown split name: {split}")
         
         self.len = len(self.session_list)
-        # print(f"Loaded {self.len} dialogues for {split}.")
 
     def __getitem__(self, index):
         ses_id = self.session_list[index]
@@ -77,7 +74,9 @@ class MultimodalDAGDataset(Dataset):
 
         for utt_id in utt_ids:
             hard_label = self.hard_labels.get(utt_id, -1)
-            if hard_label == 5:
+            
+            # <--- 修正: NMAフラグが立っていない場合のみ 'xxx'(5) をスキップ
+            if not self.nma and hard_label == 5:
                 continue
 
             bert_feat = self.bert_features.get(utt_id)
@@ -95,6 +94,7 @@ class MultimodalDAGDataset(Dataset):
             else:
                 label_sum = np.sum(soft_label_vec)
                 if label_sum > 0:
+                    # NMAの場合もソフトラベル（分布）は存在するためそのまま使用
                     labels_soft_list.append(soft_label_vec / label_sum)
                 else:
                     labels_soft_list.append(np.array([-1.0] * 5))

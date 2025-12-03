@@ -4,7 +4,6 @@ import numpy as np, argparse, time, random, logging
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-# <--- 追加: スケジューラ用
 from transformers import get_linear_schedule_with_warmup
 import copy
 
@@ -33,22 +32,14 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
-# NLL損失関数クラス
 class SoftNLLLoss(nn.Module):
     def __init__(self, reduction='sum'):
         super().__init__()
         self.reduction = reduction
-
     def forward(self, log_probs, targets):
-        """
-        log_probs: 対数確率 (N, C)
-        targets: 正解確率分布 (N, C)
-        """
         loss = -torch.sum(targets * log_probs, dim=1)
-        if self.reduction == 'sum':
-            return loss.sum()
-        elif self.reduction == 'mean':
-            return loss.mean()
+        if self.reduction == 'sum': return loss.sum()
+        elif self.reduction == 'mean': return loss.mean()
         return loss
 
 if __name__ == '__main__':
@@ -61,7 +52,11 @@ if __name__ == '__main__':
     parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss'], 
                         help='Metric to select best model (f1: Maximize F1, loss: Minimize NLL)')
     parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5])
-    parser.add_argument('--log_file_name', type=str, default=None, help='Name of the log file.')
+    parser.add_argument('--log_file_name', type=str, default=None)
+    parser.add_argument('--dev_ratio', type=float, default=0.2)
+
+    # <--- 追加: NMA (No Majority Agreement) フラグ
+    parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
 
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
@@ -90,32 +85,36 @@ if __name__ == '__main__':
     parser.add_argument('--no_cuda', action='store_true')
 
     args = parser.parse_args()
-    print(args)
-    
     seed_everything(args.seed)
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     
     if args.log_file_name:
         log_file_path = os.path.join(path, args.log_file_name)
     else:
-        log_file_path = os.path.join(path, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}.log')
+        # nma フラグがある場合はログファイル名にも反映
+        nma_suffix = "_nma" if args.nma else ""
+        log_file_path = os.path.join(path, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}{nma_suffix}.log')
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
-    logger.info(f'Test Session (Fold): {args.test_session}')
     logger.info(f'Evaluation Metric: {args.eval_metric}')
+    logger.info(f'Validation Ratio: {args.dev_ratio}')
+    logger.info(f'NMA Mode: {args.nma}') # ログに記録
     logger.info(args)
 
     cuda = args.cuda
     n_epochs = args.epochs
     batch_size = args.batch_size
     
+    # <--- 修正: nma=args.nma を渡す
     train_loader, valid_loader, test_loader, speaker_vocab, label_vocab = get_multimodal_loaders(
         data_dir=args.data_dir, 
         batch_size=batch_size, 
         num_workers=0, 
         args=args,
-        test_session=args.test_session
+        test_session=args.test_session,
+        dev_ratio=args.dev_ratio,
+        nma=args.nma # <--- 追加
     )
     
     n_classes = len(label_vocab['itos'])
@@ -126,20 +125,16 @@ if __name__ == '__main__':
     if cuda: model.cuda()
 
     loss_fn = SoftNLLLoss(reduction='sum')
-    
-    # <--- 修正: Weight Decay (0.01) を追加
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
+    optimizer = AdamW(model.parameters() , lr=args.lr, weight_decay=1e-2)
 
-    # <--- 追加: スケジューラの設定
     num_training_steps = len(train_loader) * args.epochs
-    num_warmup_steps = int(num_training_steps * 0.1) # 10%をウォームアップに使用
+    num_warmup_steps = int(num_training_steps * 0.1)
     
     scheduler = get_linear_schedule_with_warmup(
         optimizer, 
         num_warmup_steps=num_warmup_steps, 
         num_training_steps=num_training_steps
     )
-    logger.info(f"Total training steps: {num_training_steps}, Warmup steps: {num_warmup_steps}")
 
     if args.eval_metric == 'loss':
         best_val_score = float('inf')
@@ -153,19 +148,12 @@ if __name__ == '__main__':
     for e in range(n_epochs):
         start_time = time.time()
 
-        # Train: scheduler を渡す
         t_loss, t_nll, t_acc, _, _, t_f1 = train_or_eval_model(
-            model, loss_fn, train_loader, e, cuda, args, optimizer, 
-            scheduler=scheduler, # <--- 追加
-            train=True
+            model, loss_fn, train_loader, e, cuda, args, optimizer, scheduler, True
         )
-        
-        # Valid
         v_loss, v_nll, v_acc, _, _, v_f1 = train_or_eval_model(
             model, loss_fn, valid_loader, e, cuda, args
         )
-        
-        # Test
         test_loss, test_nll, test_acc, _, _, test_f1 = train_or_eval_model(
             model, loss_fn, test_loader, e, cuda, args
         )
