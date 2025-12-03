@@ -8,7 +8,7 @@ import os
 
 class MultimodalDAGDataset(Dataset):
     # <--- 修正: test_session 引数を追加 (デフォルトは5)
-    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5):
+    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.2, test_session=5):
         self.speaker_vocab = speaker_vocab
         self.args = args
         
