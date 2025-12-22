@@ -1,31 +1,49 @@
-import torch, numpy as np
+import torch
+import numpy as np
 from sklearn.metrics import f1_score, accuracy_score
 
-# <--- 修正: scheduler 引数を追加
 def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, optimizer=None, scheduler=None, train=False):
-    if train: model.train()
-    else: model.eval()
-    
-    losses, nll_losses, preds, labels = [], [], [], []
-    
+    losses = []
+    preds = []
+    labels = []
+    nlls = []
+
+    if train:
+        model.train()
+    else:
+        model.eval()
+
     for data in dataloader:
-        f_t, f_a, l_s, adj, mask, mask_oh, lens, _, _ = data
-        if f_t is None: continue
+        if train:
+            optimizer.zero_grad()
         
-        if cuda:
-            f_t, f_a, l_s, adj, mask, mask_oh, lens = f_t.cuda(), f_a.cuda(), l_s.cuda(), adj.cuda(), mask.cuda(), mask_oh.cuda(), lens.cuda()
+        # dataset.pyのcollate_fnの戻り値に合わせて展開
+        # features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances
+        features_text = data[0].cuda() if cuda else data[0]
+        features_audio = data[1].cuda() if cuda else data[1]
+        labels_soft = data[2].cuda() if cuda else data[2]
+        adj = data[3].cuda() if cuda else data[3]
+        s_mask = data[4].cuda() if cuda else data[4]
+        s_mask_onehot = data[5].cuda() if cuda else data[5]
+        lengths = data[6].cuda() if cuda else data[6]
         
-        if train: optimizer.zero_grad()
+        # モデル入力
+        prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths)
         
-        prob = model(f_t, f_a, adj, mask, mask_oh, lens)
+        # NLL損失の計算
         log_prob = torch.log(prob + 1e-10)
+        
+        # パディング(-1.0)を除外するためのマスク
+        l_s = labels_soft
         valid_mask = (l_s.select(2, 0) != -1.0).unsqueeze(2)
         
-        # 損失計算 (SoftNLLLoss)
+        # Loss計算 (SoftNLL)
         loss = loss_function(
             log_prob.masked_select(valid_mask).view(-1, 5), 
             l_s.masked_select(valid_mask).view(-1, 5)
         )
+        
+        # 平均化 (有効な発話数で割る)
         loss = loss / valid_mask.sum() if valid_mask.sum() > 0 else torch.tensor(0.0).to(loss.device)
         
         if train:
@@ -33,26 +51,39 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
             optimizer.step()
             
-            # <--- 追加: スケジューラの更新
             if scheduler:
                 scheduler.step()
-            
+
         losses.append(loss.item())
-        # loss がそのまま NLL なので同じ値を入れる
-        nll_losses.append(loss.item())
         
+        # 評価指標計算用のデータ収集
+        # Soft Label -> Hard Label 変換
         p_hard = torch.argmax(prob, 2)
         l_hard = torch.where(l_s.sum(2) < -0.5, torch.tensor(-1).to(l_s.device), torch.argmax(l_s, 2))
+        
+        # GPUからCPUへ戻してリスト化
         for i, seq in enumerate(l_hard.cpu().tolist()):
             for j, l in enumerate(seq):
-                if l != -1: labels.append(l); preds.append(p_hard[i][j].item())
+                if l != -1: # パディング以外
+                    labels.append(l)
+                    preds.append(p_hard[i][j].item())
+                    
+                    # NLL記録 (1発話ごと)
+                    single_log_prob = log_prob[i][j]
+                    single_label = l_s[i][j]
+                    single_nll = -torch.sum(single_label * single_log_prob).item()
+                    nlls.append(single_nll)
 
-    avg_loss = np.mean(losses) if losses else 0.0
-    # ログ表示用にも同じ値を使う
-    avg_nll = avg_loss 
-    
-    acc = accuracy_score(labels, preds) * 100 if labels else 0.0
-    f1 = f1_score(labels, preds, average='weighted', labels=list(range(5))) * 100 if labels else 0.0
-    
-    # (Loss, NLL, Acc, Labels, Preds, F1)
+    if len(preds) > 0:
+        avg_loss = np.mean(losses)
+        avg_nll = np.mean(nlls)
+        f1 = f1_score(labels, preds, average='weighted') * 100
+        acc = accuracy_score(labels, preds) * 100 # Accuracy計算
+    else:
+        avg_loss = 0.0
+        avg_nll = 0.0
+        f1 = 0.0
+        acc = 0.0
+
+    # 戻り値に acc を含める
     return avg_loss, avg_nll, acc, labels, preds, f1

@@ -1,117 +1,109 @@
 import os
 import glob
-import re
-import matplotlib.pyplot as plt
 import argparse
+import re
 
-def plot_validation_nll(log_dir='saved_models', eval_metric='loss', output_file='nll_learning_curve.png', seed=None, nma=False):
-    """
-    ログファイルを読み込み、検証データ(Val)のNLLの推移をグラフ化して保存する。
-    ベストモデル（NLL最小）の地点に〇印をつける。
-    """
-    # --- ファイル検索 ---
-    pattern = os.path.join(log_dir, f"logging_{eval_metric}_fold*.log")
-    all_log_files = glob.glob(pattern)
-    
-    if not all_log_files:
-        print(f"エラー: ログファイルが見つかりません: {pattern}")
-        return
+import matplotlib.pyplot as plt
 
-    # フィルタリング
-    log_files = []
-    for f in all_log_files:
-        if seed is not None and f"_seed{seed}" not in f: continue
-        if nma:
-            if not f.endswith("_nma.log"): continue
-        else:
-            if f.endswith("_nma.log"): continue
-        log_files.append(f)
 
-    print(f"Found {len(log_files)} log files for Metric:{eval_metric}, Seed:{seed}, NMA:{nma}")
-    if not log_files: return
+def find_log_files(log_dir, eval_metric, seed, nma, modality):
+    seed_pattern = f"seed{seed}" if seed is not None else "seed*"
+    mode_dirname = 'nma' if nma else 'default'
+    modality_pattern = modality if modality else '*'
+    pattern = os.path.join(log_dir, seed_pattern, mode_dirname, modality_pattern, f"logging_{eval_metric}_fold*.log")
+    candidates = glob.glob(pattern)
+    files = []
+    for path in candidates:
+        if seed is not None and f"_seed{seed}" not in path:
+            continue
+        if nma and not path.endswith("_nma.log"):
+            continue
+        if not nma and path.endswith("_nma.log"):
+            continue
+        files.append(path)
+    return sorted(files)
 
-    # --- データ読み込み ---
-    data = {}
-    log_pattern = re.compile(r"Ep\s+(\d+):.*?Val\s+\[NLL\s+(\d+\.\d+)")
-    fold_pattern = re.compile(r"fold(\d+)")
 
-    for log_path in sorted(log_files):
-        fold_match = fold_pattern.search(log_path)
-        fold_name = f"Fold {fold_match.group(1)}" if fold_match else os.path.basename(log_path)
-        
-        epochs = []
-        nlls = []
-        
-        with open(log_path, 'r') as f:
-            for line in f:
-                match = log_pattern.search(line)
-                if match:
-                    epochs.append(int(match.group(1)))
-                    nlls.append(float(match.group(2)))
-        
-        if epochs:
-            data[fold_name] = (epochs, nlls)
-            print(f"  Loaded {len(epochs)} epochs from {fold_name}")
+def parse_log_file(log_path):
+    epoch_rows = []
+    regex = re.compile(
+        r"Ep\s+(\d+):.*?Train\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
+        r"Val\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
+        r"Test\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]",
+        re.IGNORECASE,
+    )
+    with open(log_path, 'r') as log_file:
+        for line in log_file:
+            match = regex.search(line)
+            if not match:
+                continue
+            values = list(map(float, match.groups()[1:]))
+            epoch_rows.append(
+                {
+                    "epoch": int(match.group(1)),
+                    "train": {"nll": values[0], "f1": values[1], "acc": values[2]},
+                    "val": {"nll": values[3], "f1": values[4], "acc": values[5]},
+                    "test": {"nll": values[6], "f1": values[7], "acc": values[8]},
+                }
+            )
+    return epoch_rows
 
-    # --- グラフの描画 ---
-    plt.figure(figsize=(12, 8)) # サイズを少し大きく
-    
-    for label, (epochs, nlls) in data.items():
-        # 1. 通常の線をプロット
-        p = plt.plot(epochs, nlls, label=label, marker='.', markersize=4, linewidth=1)
-        line_color = p[0].get_color()
 
-        # 2. ベスト地点（NLL最小）を探す
-        min_nll = min(nlls)
-        min_index = nlls.index(min_nll)
-        best_epoch = epochs[min_index]
+def plot_metrics(rows, log_path, output_dir=None):
+    epochs = [row["epoch"] for row in rows]
+    metrics = [("NLL", "nll"), ("F1", "f1"), ("Acc", "acc")]
 
-        # 3. ベスト地点に強調用の〇をつける
-        # (黒い枠線の大きな丸)
-        plt.plot(best_epoch, min_nll, 'o', 
-                 markersize=12, 
-                 markerfacecolor='none', 
-                 markeredgecolor=line_color, 
-                 markeredgewidth=2)
-        
-        # 4. スコアをテキストで表示
-        plt.annotate(f"{min_nll:.4f}", 
-                     xy=(best_epoch, min_nll), 
-                     xytext=(0, -15), 
-                     textcoords='offset points', 
-                     ha='center', 
-                     fontsize=9, 
-                     color=line_color,
-                     fontweight='bold')
+    if output_dir:
+        target_dir = output_dir if os.path.isabs(output_dir) else os.path.join(output_dir)
+        os.makedirs(target_dir, exist_ok=True)
+    else:
+        target_dir = os.path.dirname(log_path)
 
-    # タイトル・ラベル設定
-    title_str = f'Validation NLL Learning Curve\n(Metric: {eval_metric}'
-    if seed is not None: title_str += f', Seed: {seed}'
-    if nma: title_str += ', NMA Mode'
-    title_str += ')'
-    
-    plt.title(title_str)
-    plt.xlabel('Epoch')
-    plt.ylabel('NLL (Negative Log-Likelihood)')
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend()
-    
-    # ファイル名設定
-    if output_file == 'nll_learning_curve.png':
-        seed_suffix = f"_seed{seed}" if seed is not None else ""
-        nma_suffix = "_nma" if nma else ""
-        output_file = f"nll_learning_curve_{eval_metric}{seed_suffix}{nma_suffix}.png"
+    base_name = os.path.splitext(os.path.basename(log_path))[0]
+    plot_path = os.path.join(target_dir, f"{base_name}.png")
 
-    plt.savefig(output_file, dpi=300)
-    print(f"\nグラフを保存しました: {output_file}")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for idx, (title, key) in enumerate(metrics):
+        axes[idx].plot(epochs, [row["train"][key] for row in rows], label="Train")
+        axes[idx].plot(epochs, [row["val"][key] for row in rows], label="Val")
+        axes[idx].plot(epochs, [row["test"][key] for row in rows], label="Test")
+        axes[idx].set_title(title)
+        axes[idx].set_xlabel("Epoch")
+        axes[idx].grid(True, linestyle="--", alpha=0.3)
+        axes[idx].legend()
+    fig.suptitle(base_name, fontsize=12)
+    fig.tight_layout()
+    fig.savefig(plot_path)
+    plt.close(fig)
+    print(f"プロットを保存しました: {plot_path}")
 
-if __name__ == "__main__":
+
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--log_dir', default='saved_models', type=str)
     parser.add_argument('--eval_metric', default='loss', type=str)
-    parser.add_argument('--output_file', default='nll_learning_curve.png', type=str)
     parser.add_argument('--seed', default=None, type=int)
     parser.add_argument('--nma', action='store_true')
-    
+    parser.add_argument('--output_dir', default=None, type=str)
+    parser.add_argument('--modality', default=None, type=str, help='特定モダリティのログだけ可視化')
     args = parser.parse_args()
-    plot_validation_nll(args.log_dir, args.eval_metric, args.output_file, args.seed, args.nma)
+
+    log_files = find_log_files(args.log_dir, args.eval_metric, args.seed, args.nma, args.modality)
+    if not log_files:
+        print(f"対象ログが見つかりません: {os.path.join(args.log_dir, 'seed*/default|nma/*')}")
+        return
+
+    out_dir = args.output_dir
+    if out_dir and not os.path.isabs(out_dir):
+        out_dir = os.path.join(args.log_dir, out_dir)
+
+    for log_path in log_files:
+        rows = parse_log_file(log_path)
+        if not rows:
+            print(f"エポック情報を解析できませんでした: {log_path}")
+            continue
+        plot_metrics(rows, log_path, out_dir)
+
+
+if __name__ == '__main__':
+    main()

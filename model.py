@@ -29,26 +29,45 @@ class bilinear_pooling(nn.Module):
         return c
 
 class DAGERC_multimodal(nn.Module):
-
+    """
+    768次元のテキスト/音声特徴を受け取り、
+    - 両モダリティ利用時は bilinear_pooling で O(=512既定) 次元に融合
+    - 単一モダリティ時は 768 -> 512 -> ReLU で圧縮
+    その後 512 -> 300 (hidden_dim) に射影し、DAG-ERC GNN へ渡す。
+    """
     def __init__(self, args, num_class):
         super().__init__()
         self.args = args
+        self.use_text = getattr(args, 'use_text', True)
+        self.use_audio = getattr(args, 'use_audio', True)
+        if not (self.use_text or self.use_audio):
+            raise ValueError("少なくとも1つのモダリティが必要です。")
+
         self.dropout = nn.Dropout(args.dropout)
         self.gnn_layers = args.gnn_layers
 
-        # 1. 融合層 (Bilinear Pooling)
-        # args.text_dim と args.audio_dim を args から渡す必要がある
-        self.fusion_layer = bilinear_pooling(
-            args.text_dim, 
-            args.audio_dim, 
-            D=args.fusion_dim_D, 
-            O=args.fusion_dim_O
-        )
-        
-        # 2. GNNへの入力射影層
-        self.fc1 = nn.Linear(self.fusion_layer.output_dim, args.hidden_dim)
+        if self.use_text and self.use_audio:
+            self.fusion_mode = 'bilinear'
+            self.fusion_layer = bilinear_pooling(
+                args.text_dim,   # 768 (BERT CLS)
+                args.audio_dim,  # 768 (Wav2Vec mean pooling)
+                D=args.fusion_dim_D,  # 低ランク内部次元 (256)
+                O=args.fusion_dim_O   # 出力融合次元 (512)
+            )
+            fusion_out_dim = self.fusion_layer.output_dim  # 512
+        else:
+            self.fusion_mode = 'single'
+            input_dim = args.text_dim if self.use_text else args.audio_dim  # 768
+            self.single_modal_proj = nn.Sequential(
+                nn.Linear(input_dim, args.single_modal_dim),  # 768 -> 512
+                nn.ReLU()
+            )
+            fusion_out_dim = args.single_modal_dim  # 512
 
-        # 3. GNN部分 (DAG-ERC と同様)
+        # 融合後 (512) -> hidden_dim (=300) に圧縮して GNN へ入力
+        self.fc1 = nn.Linear(fusion_out_dim, args.hidden_dim)
+
+        # --- GNN (各層の隠れ次元は hidden_dim=300 を維持) ---
         if not args.no_rel_attn:
             self.rel_attn = True
         else:
@@ -79,8 +98,8 @@ class DAGERC_multimodal(nn.Module):
 
         self.nodal_att_type = args.nodal_att_type
         
-        # GNNの出力次元 + 融合特徴量の次元 (skip connection)
-        in_dim = args.hidden_dim * (args.gnn_layers + 1) + self.fusion_layer.output_dim
+        # GNN の各層出力 (hidden_dim=300) と最初の融合特徴 (512) を連結
+        in_dim = args.hidden_dim * (args.gnn_layers + 1) + fusion_out_dim
 
         # 4. 出力層
         layers = [nn.Linear(in_dim, args.hidden_dim), nn.ReLU()]
@@ -94,21 +113,19 @@ class DAGERC_multimodal(nn.Module):
         self.attentive_node_features = attentive_node_features(in_dim)
 
     def forward(self, features_text, features_audio, adj, s_mask, s_mask_onehot, lengths):
-        '''
-        :param features_text: (B, N, D_t)
-        :param features_audio: (B, N, D_a)
-        :param adj: (B, N, N)
-        :param s_mask: (B, N, N)
-        :param s_mask_onehot: (B, N, N, 2)
-        :return:
-        '''
+        # features_text/audio: (B, N, 768)
         num_utter = features_text.size()[1]
 
-        # 1. 融合
-        features_fused = self.fusion_layer(features_text, features_audio) # (B, N, D_f)
+        if self.fusion_mode == 'bilinear':
+            # 双方利用時: 768_text + 768_audio -> 512
+            features_fused = self.fusion_layer(features_text, features_audio)
+        else:
+            # 単一モダリティ時: 768 -> 512
+            base_feat = features_text if self.use_text else features_audio
+            features_fused = self.single_modal_proj(base_feat)
 
-        # 2. GNN入力
-        H0 = F.relu(self.fc1(features_fused)) # (B, N, D_h)
+        # 512 -> 300 (hidden_dim)　GNN入力
+        H0 = F.relu(self.fc1(features_fused)) # (B, N, 300)
         H = [H0]
 
         # 3. GNN実行 (DAG-ERC と同様)
@@ -132,6 +149,7 @@ class DAGERC_multimodal(nn.Module):
             H.append(H1)
         
         # 4. Skip connection (融合特徴量)
+        # Skip connection: GNN各層(300)と融合特徴(512)を結合 ⇒ (B, N, in_dim)
         H.append(features_fused) 
         
         H = torch.cat(H, dim = 2) 
@@ -145,4 +163,5 @@ class DAGERC_multimodal(nn.Module):
         # return F.log_softmax(logits, dim=2)
         
         # 5. 出力
-        return F.softmax(self.out_mlp(H), dim=2) # (B, N, C)
+        # 最終 MLP (attentive_node_features で (B, N, in_dim) -> (B, N, hidden_dim))
+        return F.softmax(self.out_mlp(H), dim=2) # (B, N, num_class=5)
