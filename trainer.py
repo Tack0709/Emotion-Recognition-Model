@@ -7,6 +7,11 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
     preds = []
     labels = []
     nlls = []
+    
+    # ★追加: 保存用リスト
+    raw_probs = []       # 予測確率分布
+    raw_soft_labels = [] # 正解ソフトラベル
+    text_data = []       # 発話テキスト
 
     if train:
         model.train()
@@ -26,6 +31,9 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         s_mask = data[4].cuda() if cuda else data[4]
         s_mask_onehot = data[5].cuda() if cuda else data[5]
         lengths = data[6].cuda() if cuda else data[6]
+        
+        # ★追加: テキストデータの取得 (dataset.pyのcollate_fnの9番目の戻り値)
+        batch_utterances = data[8]
         
         # モデル入力
         prob = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths)
@@ -62,6 +70,11 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         l_hard = torch.where(l_s.sum(2) < -0.5, torch.tensor(-1).to(l_s.device), torch.argmax(l_s, 2))
         
         # GPUからCPUへ戻してリスト化
+        # ★ここで詳細データも収集します
+        prob_cpu = prob.detach().cpu().numpy()
+        ls_cpu = l_s.detach().cpu().numpy()
+        
+        # GPUからCPUへ戻してリスト化
         for i, seq in enumerate(l_hard.cpu().tolist()):
             for j, l in enumerate(seq):
                 if l != -1: # パディング以外
@@ -73,6 +86,12 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
                     single_label = l_s[i][j]
                     single_nll = -torch.sum(single_label * single_log_prob).item()
                     nlls.append(single_nll)
+                    
+                    # ★追加: 詳細データを保存 (train以外、つまり検証・テスト時のみ推奨)
+                    if not train:
+                        raw_probs.append(prob_cpu[i][j])
+                        raw_soft_labels.append(ls_cpu[i][j])
+                        text_data.append(batch_utterances[i][j])
 
     if len(preds) > 0:
         avg_loss = np.mean(losses)
@@ -86,4 +105,4 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         acc = 0.0
 
     # 戻り値に acc を含める
-    return avg_loss, avg_nll, acc, labels, preds, f1
+    return avg_loss, avg_nll, acc, labels, preds, f1, raw_probs, raw_soft_labels, text_data

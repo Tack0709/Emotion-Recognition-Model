@@ -152,16 +152,18 @@ if __name__ == '__main__':
     best_test_acc = 0.0
     best_epoch = -1
 
+    analysis_data = None # 初期化
+    
     for e in range(n_epochs):
         start_time = time.time()
 
-        t_loss, t_nll, t_acc, _, _, t_f1 = train_or_eval_model(
+        t_loss, t_nll, t_acc, _, _, t_f1, _, _, _ = train_or_eval_model(
             model, loss_fn, train_loader, e, cuda, args, optimizer, scheduler, True
         )
-        v_loss, v_nll, v_acc, _, _, v_f1 = train_or_eval_model(
+        v_loss, v_nll, v_acc, _, _, v_f1, _, _, _ = train_or_eval_model(
             model, loss_fn, valid_loader, e, cuda, args
         )
-        test_loss, test_nll, test_acc, _, _, test_f1 = train_or_eval_model(
+        test_loss, test_nll, test_acc,test_labels, test_preds, test_f1, test_probs, test_softs, test_texts = train_or_eval_model(
             model, loss_fn, test_loader, e, cuda, args
         )
 
@@ -188,6 +190,16 @@ if __name__ == '__main__':
             best_test_f1 = test_f1
             best_test_nll = test_nll
             best_test_acc = test_acc
+            
+            analysis_data = {
+            'epoch': best_epoch,
+            'fold': args.test_session,      # ★Fold番号も記録しておく
+            'true_ids': test_labels.copy(),        # 正解ハードラベル
+            'pred_ids': test_preds.copy(),         # 予測ハードラベル
+            'pred_probs': test_probs,       # 予測確率分布
+            'true_softs': test_softs,       # 正解ソフトラベル分布
+            'texts': test_texts             # テキスト
+            }
 
     logger.info('finish training!')
     logger.info(f"Best Epoch: {best_epoch}")
@@ -200,3 +212,12 @@ if __name__ == '__main__':
     logger.info(f"Test F1 at Best Val: {best_test_f1:.2f}")
     logger.info(f"Test NLL at Best Val: {best_test_nll:.4f}")
     logger.info(f"Test Acc at Best Val: {best_test_acc:.2f}")
+    
+    if analysis_data is not None:
+        # ファイル名設定
+        result_filename = f'test_results_fold{args.test_session}.npy'
+        result_path = os.path.join(save_dir, result_filename)
+    
+        # 保存実行
+        np.save(result_path, analysis_data)
+        logger.info(f"Saved best analysis results to {result_path}")
