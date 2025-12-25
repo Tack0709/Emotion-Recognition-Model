@@ -128,6 +128,19 @@ class DAGERC_multimodal(nn.Module):
         H0 = F.relu(self.fc1(features_fused)) # (B, N, 300)
         H = [H0]
 
+        # ==========================================
+        # ★追加: Standard GNN モードの実装
+        # ==========================================
+        if getattr(self.args, 'standard_gnn', False):
+            # 隣接行列を「全結合(全部1)」にする
+            # これにより、DAG（過去→未来のみ）の制約がなくなり、
+            # 全ての発話が相互に接続された普通のGNNとして動作します。
+            adj = torch.ones_like(adj)
+            
+            # 話者マスクも無効化（全て1）して、話者関係の区別をなくす
+            s_mask = torch.ones_like(s_mask)
+        # ==========================================
+        
         # 3. GNN実行 (DAG-ERC と同様)
         for l in range(self.args.gnn_layers):
             C = self.grus_c[l](H[l][:,0,:]).unsqueeze(1) 

@@ -4,44 +4,69 @@ import numpy as np
 import argparse
 import re
 
-def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, seed=None, nma=False, modality=None):
+def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, 
+                      seed=None, nma=False, modality='multimodal', 
+                      simple_nn=False, standard_gnn=False):
     """
     指定されたディレクトリ内のログファイルを読み込み、
     交差検証の平均スコア（F1, NLL, Acc）を計算して表示・保存する。
     """
+    
+    # --- 1. アーキテクチャ名の決定 ---
+    if simple_nn:
+        arch_name = "simple_nn"
+    elif standard_gnn:
+        arch_name = "standard_gnn"
+    else:
+        arch_name = "dag_erc"
+
+    # --- 2. ターゲットディレクトリの特定 (run.pyと同じロジック) ---
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
     mode_dirname = 'nma' if nma else 'default'
-    modality_pattern = modality if modality else '*'
-    # シード / NMA / モダリティを反映した探索パターンを構築
-    pattern = os.path.join(log_dir, seed_pattern, mode_dirname, modality_pattern, f"logging_{eval_metric}_fold*.log")
-    all_log_files = glob.glob(pattern)
+    
+    # ベースパス: saved_models/seedXXX/default/
+    base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
+
+    # フォルダ分けルールの適用
+    # ケースA: Multimodal かつ アブレーション -> 専用フォルダ (例: .../simple_nn/)
+    if modality == 'multimodal' and arch_name != 'dag_erc':
+        target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
+    # ケースB: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ (例: .../text/)
+    else:
+        target_dir_pattern = os.path.join(base_dir_pattern, modality)
+
+    # ログファイルの検索パターン構築
+    # ファイル名のパターン: logging_loss_fold*.log
+    # NMAの場合は _nma がつく場合があるため、globで広めに取って後でフィルタリング推奨ですが、
+    # 今回はディレクトリが分かれているのでシンプルにいきます。
+    log_filename_pattern = f"logging_{eval_metric}_fold*.log"
+    search_path = os.path.join(target_dir_pattern, log_filename_pattern)
+    
+    all_log_files = glob.glob(search_path)
 
     if not all_log_files:
-        print(f"エラー: ログファイルが見つかりません: {pattern}")
+        print(f"エラー: ログファイルが見つかりません: {search_path}")
+        print(f"検索条件 -> Arch: {arch_name}, Modality: {modality}, Seed: {seed}, NMA: {nma}")
         return
 
-    # フィルタリング処理
+    # --- 3. フィルタリング処理 ---
     log_files = []
     for f in all_log_files:
-        # 条件に一致するログのみ残す
-        # シード値のチェック
-        if seed is not None:
-            if f"_seed{seed}" not in f:
-                continue
-        
-        # NMAフラグのチェック
+        # NMAモードの場合、ファイル名末尾のチェック（念のため）
         if nma:
-            if not f.endswith("_nma.log"):
-                continue
+            if "_nma.log" not in f and "_nma_" not in f: 
+                 # _nma.log または logging_..._nma.log の形式を想定
+                 # 厳密にチェックしたい場合は修正してください
+                 pass 
         else:
-            if f.endswith("_nma.log"):
+            # defaultモードなのに _nma がついていたら除外
+            if "_nma.log" in f:
                 continue
         
         log_files.append(f)
 
     if not log_files:
-        print(f"条件に一致するログファイルが見つかりませんでした。")
-        print(f"Metric: {eval_metric}, Seed: {seed}, NMA: {nma}")
+        print(f"条件に一致するログファイルがフィルタリング後に残りませんでした。")
         return
 
     test_f1s = []
@@ -49,28 +74,36 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     test_accs = []
 
     result_lines = []
-    result_lines.append("-" * 40)
-    result_lines.append(f"Metric: {eval_metric}")
-    if seed is not None:
-        result_lines.append(f"Seed  : {seed}")
-    result_lines.append(f"NMA   : {nma}")
-    result_lines.append(f"Modality: {modality or 'all'}")
-    result_lines.append(f"Found : {len(log_files)} log files")
+    result_lines.append("=" * 40)
+    result_lines.append(f"Evaluation Result")
+    result_lines.append("=" * 40)
+    result_lines.append(f"Architecture: {arch_name}")
+    result_lines.append(f"Metric      : {eval_metric}")
+    result_lines.append(f"Modality    : {modality}")
+    result_lines.append(f"Mode        : {mode_dirname}")
+    result_lines.append(f"Seed        : {seed if seed is not None else 'All'}")
+    result_lines.append(f"Found Logs  : {len(log_files)}")
     result_lines.append("-" * 40)
 
+    # ログ読み込み処理
     for log_file in sorted(log_files):
-        # 各ログから評価結果を抽出
         with open(log_file, 'r') as f:
             content = f.read()
             
+            # 正規表現でスコア抽出
             f1_match = re.search(r"Test F1 at Best Val: (\d+\.\d+)", content)
             nll_match = re.search(r"Test (NLL|Loss) at Best Val: (\d+\.\d+)", content)
             acc_match = re.search(r"Test Acc at Best Val: (\d+\.\d+)", content)
 
+            # Fold番号抽出
             fold_match = re.search(r"fold(\d+)", log_file)
             fold_num = fold_match.group(1) if fold_match else "?"
             
+            # Seed番号抽出 (親ディレクトリ名などから推測、またはファイル名)
             seed_match = re.search(r"seed(\d+)", log_file)
+            # ファイル名になければパスから探す
+            if not seed_match:
+                seed_match = re.search(r"seed(\d+)", log_file)
             seed_num = seed_match.group(1) if seed_match else "?"
 
             if f1_match and nll_match:
@@ -86,53 +119,55 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
                 if seed is None:
                     prefix += f" (Seed {seed_num})"
                 
-                acc_str = f", Acc = {acc:.2f}" if acc_match else ""
-                result_lines.append(f"  {prefix}: F1 = {f1:.2f}, NLL = {nll:.4f}{acc_str}")
+                acc_str = f", Acc = {acc:.4f}" if acc_match else ""
+                result_lines.append(f"  {prefix}: F1 = {f1:.4f}, NLL = {nll:.4f}{acc_str}")
             else:
-                result_lines.append(f"  Fold {fold_num}: Warning - Score not found.")
+                result_lines.append(f"  Fold {fold_num}: Warning - Score not found in log.")
 
     result_lines.append("-" * 40)
     
     if test_f1s:
-        # Fold 全体の平均と分散を計算
         avg_f1 = np.mean(test_f1s)
         std_f1 = np.std(test_f1s)
         avg_nll = np.mean(test_nlls)
         std_nll = np.std(test_nlls)
 
-        result_lines.append(f"Average Test F1  : {avg_f1:.2f} (+/- {std_f1:.2f})")
+        result_lines.append(f"Average Test F1  : {avg_f1:.4f} (+/- {std_f1:.4f})")
         result_lines.append(f"Average Test NLL : {avg_nll:.4f} (+/- {std_nll:.4f})")
         
         if test_accs:
             avg_acc = np.mean(test_accs)
             std_acc = np.std(test_accs)
-            result_lines.append(f"Average Test Acc : {avg_acc:.2f} (+/- {std_acc:.2f})")
+            result_lines.append(f"Average Test Acc : {avg_acc:.4f} (+/- {std_acc:.4f})")
     else:
         result_lines.append("有効なスコアが見つかりませんでした。")
     
-    result_lines.append("-" * 40)
+    result_lines.append("=" * 40)
 
     output_text = "\n".join(result_lines)
     print(output_text)
 
-    # 保存先ファイルパスを決定
+    # --- 4. 結果の保存 ---
     if output_file:
-        out_path = output_file if os.path.isabs(output_file) else os.path.join(log_dir, output_file)
+        out_path = output_file
     else:
-        if seed is not None:
-            target_dir = os.path.join(log_dir, f"seed{seed}", mode_dirname)
-            if modality:
-                target_dir = os.path.join(target_dir, modality)
-            os.makedirs(target_dir, exist_ok=True)
-            suffix = modality or mode_dirname
-            out_path = os.path.join(target_dir, f"average_result_{eval_metric}_{suffix}.txt")
+        # ログが見つかったディレクトリ（またはその親）に保存
+        # target_dir_pattern は glob パターンを含む可能性があるので、
+        # 確実な保存先として、最初に見つかったログファイルのディレクトリを使用します
+        if log_files:
+            save_dir = os.path.dirname(log_files[0])
         else:
-            suffix = f"{mode_dirname}_{modality}" if modality else f"{mode_dirname}_all_modalities"
-            out_path = os.path.join(log_dir, f"average_result_{eval_metric}_seed_all_{suffix}.txt")
+            save_dir = log_dir # フォールバック
 
-    with open(out_path, 'w') as f:
-        f.write(output_text)
-    print(f"結果を保存しました: {out_path}")
+        suffix = f"{arch_name}_{modality}"
+        out_path = os.path.join(save_dir, f"average_result_{eval_metric}_{suffix}.txt")
+
+    try:
+        with open(out_path, 'w') as f:
+            f.write(output_text)
+        print(f"結果を保存しました: {out_path}")
+    except Exception as e:
+        print(f"保存に失敗しました: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -141,8 +176,23 @@ if __name__ == "__main__":
     parser.add_argument('--output_file', default=None, type=str)
     parser.add_argument('--seed', default=None, type=int, help='Filter logs by specific seed value')
     parser.add_argument('--nma', action='store_true', help='Filter logs for NMA mode')
-    parser.add_argument('--modality', default=None, type=str, help='特定モダリティのログに限定')
+    
+    # defaultを 'multimodal' に設定
+    parser.add_argument('--modality', default='multimodal', type=str, help='Modality (multimodal, text, audio)')
+    
+    # ★追加: アブレーション用フラグ
+    parser.add_argument('--simple_nn', action='store_true')
+    parser.add_argument('--standard_gnn', action='store_true')
     
     args = parser.parse_args()
     
-    calculate_average(args.log_dir, args.eval_metric, args.output_file, args.seed, args.nma, args.modality)
+    calculate_average(
+        log_dir=args.log_dir, 
+        eval_metric=args.eval_metric, 
+        output_file=args.output_file, 
+        seed=args.seed, 
+        nma=args.nma, 
+        modality=args.modality,
+        simple_nn=args.simple_nn,
+        standard_gnn=args.standard_gnn
+    )

@@ -81,6 +81,10 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=100)
     parser.add_argument('--no_cuda', action='store_true')
     parser.add_argument('--modality', type=str, default='multimodal', help='保存先や処理をモダリティ別に分岐')
+    
+    # アブレーション実験用のフラグ
+    parser.add_argument('--simple_nn', action='store_true', help='Use Simple NN (No GNN, Context-free)')
+    parser.add_argument('--standard_gnn', action='store_true', help='Use Standard GNN (Fully connected)')
  
     args = parser.parse_args()
     seed_everything(args.seed)
@@ -91,8 +95,30 @@ if __name__ == '__main__':
     if not (args.use_text or args.use_audio):
         raise ValueError("少なくとも1つのモダリティを有効にしてください。")
     
+    if args.simple_nn:
+        arch_name = "simple_nn"
+    elif args.standard_gnn:
+        arch_name = "standard_gnn"
+    else:
+        arch_name = "dag_erc"
+    
     mode_dir = 'nma' if args.nma else 'default'
-    save_dir = os.path.join('saved_models', f'seed{args.seed}', mode_dir, args.modality)
+    base_save_dir = os.path.join('saved_models', f'seed{args.seed}', mode_dir)
+
+    # ============================================================
+    # ★修正: Multimodalのアブレーションだけ「特例」、それ以外は「標準」にまとめる
+    # ============================================================
+    
+    # ケース1: Multimodal かつ アブレーション (SimpleNN/StandardGNN)
+    # → multimodalフォルダを作らず、直下に simple_nn などを配置 (特例)
+    if args.modality == 'multimodal' and arch_name != 'dag_erc':
+        save_dir = os.path.join(base_save_dir, arch_name)
+        
+    # ケース2: それ以外 (DAG-ERC全般、または Text/Audio のアブレーション)
+    # → dag_erc側と同じく、まずはモダリティフォルダに入るべきグループ
+    else:
+        # まずはモダリティ階層へ (例: .../multimodal/ または .../text/)
+        save_dir_dir = os.path.join(base_save_dir, args.modality)
     os.makedirs(save_dir, exist_ok=True)
      
     if args.log_file_name:
