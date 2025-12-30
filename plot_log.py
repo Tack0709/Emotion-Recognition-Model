@@ -4,9 +4,11 @@ import argparse
 import re
 import matplotlib.pyplot as plt
 
-def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn):
+def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2):
     # --- 1. アーキテクチャ名の決定 ---
-    if simple_nn:
+    if edl_r2:
+        arch_name = "edl_r2"
+    elif simple_nn:
         arch_name = "simple_nn"
     elif standard_gnn:
         arch_name = "standard_gnn"
@@ -21,17 +23,18 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
 
     # フォルダ分けルールの適用
-    if modality == 'multimodal' and arch_name != 'dag_erc':
-        # ケースA: Multimodal かつ アブレーション -> 専用フォルダ (例: .../simple_nn/)
+    if edl_r2:
+        # ★ ケース: EDL(R2) -> 専用フォルダ
+        target_dir_pattern = os.path.join(base_dir_pattern, 'edl_r2')
+    elif modality == 'multimodal' and arch_name != 'dag_erc':
+        # ★ ケース: Multimodal かつ アブレーション -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
     else:
-        # ケースB: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ (例: .../text/)
-        # modalityがNoneの場合はワイルドカード
+        # ★ ケース: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ
         mod_pat = modality if modality else '*'
         target_dir_pattern = os.path.join(base_dir_pattern, mod_pat)
 
     # ログファイルの検索パターン
-    # ファイル名: logging_loss_fold*.log
     file_pattern = f"logging_{eval_metric}_fold*.log"
     search_path = os.path.join(target_dir_pattern, file_pattern)
     
@@ -41,7 +44,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     files = []
     for path in candidates:
         if seed is not None and f"seed{seed}" not in path and f"seed{seed}" not in os.path.dirname(path):
-            # seedはパスに含まれるはずだが、念のためチェック
             continue
             
         # NMAのフィルタリング
@@ -60,7 +62,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
 def parse_log_file(log_path):
     epoch_rows = []
     # ログ形式に合わせた正規表現
-    # 例: Ep  1: [2.5s] Train [NLL 1.234 F1 0.456 Acc 0.789] | Val [NLL ...
     regex = re.compile(
         r"Ep\s+(\d+):.*?Train\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
         r"Val\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
@@ -89,7 +90,6 @@ def plot_metrics(rows, log_path, output_dir=None):
     epochs = [row["epoch"] for row in rows]
     metrics = [("NLL", "nll"), ("F1", "f1"), ("Acc", "acc")]
 
-    # 保存先ディレクトリの決定
     if output_dir:
         target_dir = output_dir if os.path.isabs(output_dir) else os.path.join(output_dir)
         os.makedirs(target_dir, exist_ok=True)
@@ -124,24 +124,24 @@ def main():
     parser.add_argument('--nma', action='store_true')
     parser.add_argument('--output_dir', default=None, type=str)
     
-    # defaultを 'multimodal' に設定
     parser.add_argument('--modality', default='multimodal', type=str, help='特定モダリティのログだけ可視化')
     
-    # ★追加: アブレーション用フラグ
+    # アブレーション & EDL用フラグ
     parser.add_argument('--simple_nn', action='store_true')
     parser.add_argument('--standard_gnn', action='store_true')
+    parser.add_argument('--edl_r2', action='store_true') # ★追加
 
     args = parser.parse_args()
 
-    # ログファイルの検索（引数追加）
+    # ログファイルの検索
     log_files = find_log_files(
         args.log_dir, args.eval_metric, args.seed, args.nma, args.modality,
-        args.simple_nn, args.standard_gnn
+        args.simple_nn, args.standard_gnn, args.edl_r2
     )
     
     if not log_files:
         print(f"対象ログが見つかりません。")
-        print(f"条件: Seed={args.seed}, NMA={args.nma}, Modality={args.modality}, SimpleNN={args.simple_nn}, StandardGNN={args.standard_gnn}")
+        print(f"条件: Seed={args.seed}, NMA={args.nma}, Modality={args.modality}, EDL(R2)={args.edl_r2}")
         return
 
     out_dir = args.output_dir

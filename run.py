@@ -10,6 +10,7 @@ import copy
 from dataloader import get_multimodal_loaders
 from model import DAGERC_multimodal
 from trainer import train_or_eval_model
+from loss import EDL_R2_Loss  # ★追加: loss.pyからインポート
 
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
@@ -37,6 +38,8 @@ class SoftNLLLoss(nn.Module):
         super().__init__()
         self.reduction = reduction
     def forward(self, log_probs, targets):
+        # targets: Soft Labels (Probabilities)
+        # log_probs: Log Probabilities
         loss = -torch.sum(targets * log_probs, dim=1)
         if self.reduction == 'sum': return loss.sum()
         elif self.reduction == 'mean': return loss.mean()
@@ -85,6 +88,9 @@ if __name__ == '__main__':
     # アブレーション実験用のフラグ
     parser.add_argument('--simple_nn', action='store_true', help='Use Simple NN (No GNN, Context-free)')
     parser.add_argument('--standard_gnn', action='store_true', help='Use Standard GNN (Fully connected)')
+    
+    # ★追加: EDL(R2)用フラグ
+    parser.add_argument('--edl_r2', action='store_true', help='Use EDL(R2) Loss and Dirichlet distribution')
  
     args = parser.parse_args()
     seed_everything(args.seed)
@@ -95,7 +101,12 @@ if __name__ == '__main__':
     if not (args.use_text or args.use_audio):
         raise ValueError("少なくとも1つのモダリティを有効にしてください。")
     
-    if args.simple_nn:
+    # --- 前提条件のチェックとアーキテクチャ名の決定 ---
+    if args.edl_r2:
+        if args.modality != 'multimodal' or args.simple_nn or args.standard_gnn:
+            raise ValueError("エラー: --edl_r2 は multimodal かつ DAG-ERC (simple_nn/standard_gnnなし) の時のみ使用可能です。")
+        arch_name = "edl_r2" 
+    elif args.simple_nn:
         arch_name = "simple_nn"
     elif args.standard_gnn:
         arch_name = "standard_gnn"
@@ -105,20 +116,17 @@ if __name__ == '__main__':
     mode_dir = 'nma' if args.nma else 'default'
     base_save_dir = os.path.join('saved_models', f'seed{args.seed}', mode_dir)
 
-    # ============================================================
-    # ★修正: Multimodalのアブレーションだけ「特例」、それ以外は「標準」にまとめる
-    # ============================================================
-    
-    # ケース1: Multimodal かつ アブレーション (SimpleNN/StandardGNN)
-    # → multimodalフォルダを作らず、直下に simple_nn などを配置 (特例)
-    if args.modality == 'multimodal' and arch_name != 'dag_erc':
+    # フォルダ分けルール
+    if args.edl_r2:
+        # ★ EDL(R2)の場合: default/edl_r2/
+        save_dir = os.path.join(base_save_dir, 'edl_r2')
+    elif args.modality == 'multimodal' and arch_name != 'dag_erc':
+        # アブレーション (simple_nn / standard_gnn)
         save_dir = os.path.join(base_save_dir, arch_name)
-        
-    # ケース2: それ以外 (DAG-ERC全般、または Text/Audio のアブレーション)
-    # → dag_erc側と同じく、まずはモダリティフォルダに入るべきグループ
     else:
-        # まずはモダリティ階層へ (例: .../multimodal/ または .../text/)
-        save_dir_dir = os.path.join(base_save_dir, args.modality)
+        # 通常のDAG-ERC (multimodal/text/audio)
+        save_dir = os.path.join(base_save_dir, args.modality)
+    
     os.makedirs(save_dir, exist_ok=True)
      
     if args.log_file_name:
@@ -129,10 +137,8 @@ if __name__ == '__main__':
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
+    logger.info(f'Architecture: {arch_name}')
     logger.info(f'Evaluation Metric: {args.eval_metric}')
-    logger.info(f'Validation Ratio: {args.dev_ratio}')
-    logger.info(f'NMA Mode: {args.nma}')
-    logger.info(f'Modality: {args.modality} (text={args.use_text}, audio={args.use_audio})')
     logger.info(args)
 
     cuda = args.cuda
@@ -153,10 +159,18 @@ if __name__ == '__main__':
     print('n_classes:', n_classes)
 
     print('building model..')
+    # n_classesを渡すように変更（model側で受け取れる場合）
     model = DAGERC_multimodal(args, n_classes)
     if cuda: model.cuda()
 
-    loss_fn = SoftNLLLoss(reduction='sum')
+    # --- 損失関数の定義 ---
+    if args.edl_r2:
+        logger.info("Using EDL(R2) Loss")
+        # IEMOCAP: lambda_coef=0.8, CREMA-D: 0.2 (ここでは0.8で固定)
+        criterion = EDL_R2_Loss(annealing_step=args.epochs, lambda_coef=0.8, device='cuda' if cuda else 'cpu')
+    else:
+        criterion = SoftNLLLoss(reduction='sum')
+
     optimizer = AdamW(model.parameters() , lr=args.lr, weight_decay=1e-2)
 
     num_training_steps = len(train_loader) * args.epochs
@@ -178,19 +192,20 @@ if __name__ == '__main__':
     best_test_acc = 0.0
     best_epoch = -1
 
-    analysis_data = None # 初期化
+    analysis_data = None
     
     for e in range(n_epochs):
         start_time = time.time()
 
+        # 戻り値のアンパックを統一
         t_loss, t_nll, t_acc, _, _, t_f1, _, _, _ = train_or_eval_model(
-            model, loss_fn, train_loader, e, cuda, args, optimizer, scheduler, True
+            model, criterion, train_loader, e, cuda, args, optimizer, scheduler, True
         )
         v_loss, v_nll, v_acc, _, _, v_f1, _, _, _ = train_or_eval_model(
-            model, loss_fn, valid_loader, e, cuda, args
+            model, criterion, valid_loader, e, cuda, args
         )
-        test_loss, test_nll, test_acc,test_labels, test_preds, test_f1, test_probs, test_softs, test_texts = train_or_eval_model(
-            model, loss_fn, test_loader, e, cuda, args
+        test_loss, test_nll, test_acc, test_labels, test_preds, test_f1, test_probs, test_softs, test_texts = train_or_eval_model(
+            model, criterion, test_loader, e, cuda, args
         )
 
         logger.info(
@@ -218,13 +233,13 @@ if __name__ == '__main__':
             best_test_acc = test_acc
             
             analysis_data = {
-            'epoch': best_epoch,
-            'fold': args.test_session,      # ★Fold番号も記録しておく
-            'true_ids': test_labels.copy(),        # 正解ハードラベル
-            'pred_ids': test_preds.copy(),         # 予測ハードラベル
-            'pred_probs': test_probs,       # 予測確率分布
-            'true_softs': test_softs,       # 正解ソフトラベル分布
-            'texts': test_texts             # テキスト
+                'epoch': best_epoch,
+                'fold': args.test_session,
+                'true_ids': test_labels,    # copy()不要 (trainerでリスト化済)
+                'pred_ids': test_preds,
+                'pred_probs': test_probs,
+                'true_softs': test_softs,
+                'texts': test_texts
             }
 
     logger.info('finish training!')
@@ -240,10 +255,8 @@ if __name__ == '__main__':
     logger.info(f"Test Acc at Best Val: {best_test_acc:.2f}")
     
     if analysis_data is not None:
-        # ファイル名設定
         result_filename = f'test_results_fold{args.test_session}.npy'
         result_path = os.path.join(save_dir, result_filename)
     
-        # 保存実行
         np.save(result_path, analysis_data)
         logger.info(f"Saved best analysis results to {result_path}")

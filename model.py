@@ -100,6 +100,11 @@ class DAGERC_multimodal(nn.Module):
         
         # GNN の各層出力 (hidden_dim=300) と最初の融合特徴 (512) を連結
         in_dim = args.hidden_dim * (args.gnn_layers + 1) + fusion_out_dim
+        
+        # Simple NN の場合は GNN をバイパスするため、入力次元が変わる
+        if getattr(args, 'simple_nn', False):
+            # 融合特徴量(512) のみを使用
+            in_dim = fusion_out_dim
 
         # 4. 出力層
         layers = [nn.Linear(in_dim, args.hidden_dim), nn.ReLU()]
@@ -124,12 +129,30 @@ class DAGERC_multimodal(nn.Module):
             base_feat = features_text if self.use_text else features_audio
             features_fused = self.single_modal_proj(base_feat)
 
+        # ==========================================
+        # ★追加: Simple NN モード (Context-free)
+        # ==========================================
+        if getattr(self.args, 'simple_nn', False):
+            # GNNを通さず、融合特徴量を直接出力層へ
+            # H = features_fused
+            logits = self.out_mlp(features_fused)
+            
+            # --- 出力層の分岐 (EDL or Softmax) ---
+            if getattr(self.args, 'edl_r2', False):
+                return torch.exp(logits) # Evidence
+            else:
+                return F.softmax(logits, dim=2)
+
+        # ==========================================
+        # GNN使用モード (通常DAG-ERC または Standard GNN)
+        # ==========================================
+        
         # 512 -> 300 (hidden_dim)　GNN入力
         H0 = F.relu(self.fc1(features_fused)) # (B, N, 300)
         H = [H0]
 
         # ==========================================
-        # ★追加: Standard GNN モードの実装
+        # ★追加: Standard GNN モード
         # ==========================================
         if getattr(self.args, 'standard_gnn', False):
             # 隣接行列を「全結合(全部1)」にする
@@ -139,7 +162,6 @@ class DAGERC_multimodal(nn.Module):
             
             # 話者マスクも無効化（全て1）して、話者関係の区別をなくす
             s_mask = torch.ones_like(s_mask)
-        # ==========================================
         
         # 3. GNN実行 (DAG-ERC と同様)
         for l in range(self.args.gnn_layers):
@@ -169,12 +191,17 @@ class DAGERC_multimodal(nn.Module):
 
         H = self.attentive_node_features(H, lengths, self.nodal_att_type) 
 
-        # # 5. 出力
-        # logits = self.out_mlp(H) # (B, N, C)
-
-        # # NLL (KLDivLoss) のために log_softmax を返す
-        # return F.log_softmax(logits, dim=2)
-        
         # 5. 出力
-        # 最終 MLP (attentive_node_features で (B, N, in_dim) -> (B, N, hidden_dim))
-        return F.softmax(self.out_mlp(H), dim=2) # (B, N, num_class=5)
+        logits = self.out_mlp(H) # (B, N, num_class)
+
+        # ==========================================
+        # ★追加: EDL(R2) 使用時の分岐
+        # ==========================================
+        if getattr(self.args, 'edl_r2', False):
+            # EDLの場合: 証拠 (Evidence) を返す
+            # Evidence = exp(logits) で非負の値を保証
+            # (場合によっては +1 することもあるが、loss.pyの仕様に合わせる)
+            return torch.exp(logits)
+        
+        # 通常の場合: 確率 (Probability) を返す
+        return F.softmax(logits, dim=2)

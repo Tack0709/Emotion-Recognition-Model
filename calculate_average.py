@@ -6,14 +6,16 @@ import re
 
 def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, 
                       seed=None, nma=False, modality='multimodal', 
-                      simple_nn=False, standard_gnn=False):
+                      simple_nn=False, standard_gnn=False, edl_r2=False):
     """
     指定されたディレクトリ内のログファイルを読み込み、
     交差検証の平均スコア（F1, NLL, Acc）を計算して表示・保存する。
     """
     
     # --- 1. アーキテクチャ名の決定 ---
-    if simple_nn:
+    if edl_r2:
+        arch_name = "edl_r2"
+    elif simple_nn:
         arch_name = "simple_nn"
     elif standard_gnn:
         arch_name = "standard_gnn"
@@ -28,17 +30,17 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
 
     # フォルダ分けルールの適用
-    # ケースA: Multimodal かつ アブレーション -> 専用フォルダ (例: .../simple_nn/)
-    if modality == 'multimodal' and arch_name != 'dag_erc':
+    if edl_r2:
+        # ★ ケース: EDL(R2) -> 専用フォルダ
+        target_dir_pattern = os.path.join(base_dir_pattern, 'edl_r2')
+    elif modality == 'multimodal' and arch_name != 'dag_erc':
+        # ★ ケース: Multimodal かつ アブレーション -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
-    # ケースB: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ (例: .../text/)
     else:
+        # ★ ケース: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, modality)
 
     # ログファイルの検索パターン構築
-    # ファイル名のパターン: logging_loss_fold*.log
-    # NMAの場合は _nma がつく場合があるため、globで広めに取って後でフィルタリング推奨ですが、
-    # 今回はディレクトリが分かれているのでシンプルにいきます。
     log_filename_pattern = f"logging_{eval_metric}_fold*.log"
     search_path = os.path.join(target_dir_pattern, log_filename_pattern)
     
@@ -52,15 +54,11 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     # --- 3. フィルタリング処理 ---
     log_files = []
     for f in all_log_files:
-        # NMAモードの場合、ファイル名末尾のチェック（念のため）
         if nma:
             if "_nma.log" not in f and "_nma_" not in f: 
-                 # _nma.log または logging_..._nma.log の形式を想定
-                 # 厳密にチェックしたい場合は修正してください
                  pass 
         else:
-            # defaultモードなのに _nma がついていたら除外
-            if "_nma.log" in f:
+            if "_nma.log" in f or "_nma_" in f:
                 continue
         
         log_files.append(f)
@@ -90,18 +88,14 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
         with open(log_file, 'r') as f:
             content = f.read()
             
-            # 正規表現でスコア抽出
             f1_match = re.search(r"Test F1 at Best Val: (\d+\.\d+)", content)
             nll_match = re.search(r"Test (NLL|Loss) at Best Val: (\d+\.\d+)", content)
             acc_match = re.search(r"Test Acc at Best Val: (\d+\.\d+)", content)
 
-            # Fold番号抽出
             fold_match = re.search(r"fold(\d+)", log_file)
             fold_num = fold_match.group(1) if fold_match else "?"
             
-            # Seed番号抽出 (親ディレクトリ名などから推測、またはファイル名)
             seed_match = re.search(r"seed(\d+)", log_file)
-            # ファイル名になければパスから探す
             if not seed_match:
                 seed_match = re.search(r"seed(\d+)", log_file)
             seed_num = seed_match.group(1) if seed_match else "?"
@@ -151,13 +145,10 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     if output_file:
         out_path = output_file
     else:
-        # ログが見つかったディレクトリ（またはその親）に保存
-        # target_dir_pattern は glob パターンを含む可能性があるので、
-        # 確実な保存先として、最初に見つかったログファイルのディレクトリを使用します
         if log_files:
             save_dir = os.path.dirname(log_files[0])
         else:
-            save_dir = log_dir # フォールバック
+            save_dir = log_dir
 
         suffix = f"{arch_name}_{modality}"
         out_path = os.path.join(save_dir, f"average_result_{eval_metric}_{suffix}.txt")
@@ -174,15 +165,14 @@ if __name__ == "__main__":
     parser.add_argument('--log_dir', default='saved_models', type=str)
     parser.add_argument('--eval_metric', default='loss', type=str)
     parser.add_argument('--output_file', default=None, type=str)
-    parser.add_argument('--seed', default=None, type=int, help='Filter logs by specific seed value')
-    parser.add_argument('--nma', action='store_true', help='Filter logs for NMA mode')
+    parser.add_argument('--seed', default=None, type=int)
+    parser.add_argument('--nma', action='store_true')
+    parser.add_argument('--modality', default='multimodal', type=str)
     
-    # defaultを 'multimodal' に設定
-    parser.add_argument('--modality', default='multimodal', type=str, help='Modality (multimodal, text, audio)')
-    
-    # ★追加: アブレーション用フラグ
+    # アブレーション & EDL用フラグ
     parser.add_argument('--simple_nn', action='store_true')
     parser.add_argument('--standard_gnn', action='store_true')
+    parser.add_argument('--edl_r2', action='store_true') # ★追加
     
     args = parser.parse_args()
     
@@ -194,5 +184,6 @@ if __name__ == "__main__":
         nma=args.nma, 
         modality=args.modality,
         simple_nn=args.simple_nn,
-        standard_gnn=args.standard_gnn
+        standard_gnn=args.standard_gnn,
+        edl_r2=args.edl_r2
     )
