@@ -25,17 +25,17 @@ def load_vocab(data_dir):
 
     return speaker_vocab, label_vocab
 
-# <--- 修正: nma 引数を追加 (デフォルトFalse)
-def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False):
+# ★修正: nma_only 引数を追加 (デフォルトFalse)
+def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False, nma_only=False):
     print('building vocab.. ')
     speaker_vocab, label_vocab = load_vocab(data_dir)
     
-    print(f'building datasets for Session {test_session} as Test (Dev Ratio: {dev_ratio}, NMA: {nma})...')
+    print(f'building datasets for Session {test_session} as Test (NMA={nma}, NMA_ONLY={nma_only})...')
     
-    # <--- 修正: nma を渡す
-    trainset = MultimodalDAGDataset(split='train', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma)
-    devset = MultimodalDAGDataset(split='dev', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma)
-    testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma)
+    # ★修正: nma_only を渡す
+    trainset = MultimodalDAGDataset(split='train', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma, nma_only=nma_only)
+    devset = MultimodalDAGDataset(split='dev', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma, nma_only=nma_only)
+    testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma, nma_only=nma_only)
     
     train_sampler = get_train_valid_sampler(trainset)
     valid_sampler = get_train_valid_sampler(devset)

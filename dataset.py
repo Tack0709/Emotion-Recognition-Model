@@ -7,16 +7,17 @@ import random
 import os
 
 class MultimodalDAGDataset(Dataset):
-    # <--- 修正: nma 引数を追加 (デフォルトFalse)
-    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5, nma=False):
+    # ★修正: nma_only 引数を追加 (デフォルトFalse)
+    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5, nma=False, nma_only=False):
         self.speaker_vocab = speaker_vocab
         self.args = args
-        self.nma = nma # <--- フラグを保存
+        self.nma = nma
+        self.nma_only = nma_only # ★追加: これがTrueならNMAデータだけを使う
         
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
 
-        print(f"Loading {split} data from {data_dir} (NMA: {self.nma})...")
+        print(f"Loading {split} data (NMA={self.nma}, NMA_ONLY={self.nma_only})...")
 
         self.bert_features = np.load(os.path.join(data_dir, 'bert-base-diag.npy'), allow_pickle=True).item()
         self.w2v2_features = np.load(os.path.join(data_dir, 'w2v2-ft-diag.npy'), allow_pickle=True).item()
@@ -75,9 +76,20 @@ class MultimodalDAGDataset(Dataset):
         for utt_id in utt_ids:
             hard_label = self.hard_labels.get(utt_id, -1)
             
-            # <--- 修正: NMAフラグが立っていない場合のみ 'xxx'(5) をスキップ
+            # ==========================================================
+            # ★修正: データのフィルタリングロジック
+            # ==========================================================
+            
+            # ケース1: NMAモードではない (通常) -> NMAデータ('xxx'=5) をスキップ
             if not self.nma and hard_label == 5:
                 continue
+
+            # ケース2: NMA_ONLYモード -> MAデータ(0~4) をスキップ
+            # (NMAデータだけを集めたい場合)
+            if self.nma_only and hard_label != 5:
+                continue
+
+            # ==========================================================
 
             bert_feat = self.bert_features.get(utt_id)
             w2v2_feat = self.w2v2_features.get(utt_id)
@@ -94,7 +106,6 @@ class MultimodalDAGDataset(Dataset):
             else:
                 label_sum = np.sum(soft_label_vec)
                 if label_sum > 0:
-                    # NMAの場合もソフトラベル（分布）は存在するためそのまま使用
                     labels_soft_list.append(soft_label_vec / label_sum)
                 else:
                     labels_soft_list.append(np.array([-1.0] * 5))

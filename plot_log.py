@@ -15,26 +15,20 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     else:
         arch_name = "dag_erc"
 
-    # --- 2. ディレクトリパスの構築 (run.pyと同じロジック) ---
+    # --- 2. ディレクトリパスの構築 ---
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
     mode_dirname = 'nma' if nma else 'default'
     
-    # ベースパス: saved_models/seedXXX/default/
     base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
 
-    # フォルダ分けルールの適用
     if edl_r2:
-        # ★ ケース: EDL(R2) -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, 'edl_r2')
     elif modality == 'multimodal' and arch_name != 'dag_erc':
-        # ★ ケース: Multimodal かつ アブレーション -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
     else:
-        # ★ ケース: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ
         mod_pat = modality if modality else '*'
         target_dir_pattern = os.path.join(base_dir_pattern, mod_pat)
 
-    # ログファイルの検索パターン
     file_pattern = f"logging_{eval_metric}_fold*.log"
     search_path = os.path.join(target_dir_pattern, file_pattern)
     
@@ -46,7 +40,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
         if seed is not None and f"seed{seed}" not in path and f"seed{seed}" not in os.path.dirname(path):
             continue
             
-        # NMAのフィルタリング
         if nma:
             if "_nma.log" not in path and "_nma_" not in path:
                 continue
@@ -61,11 +54,19 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
 
 def parse_log_file(log_path):
     epoch_rows = []
-    # ログ形式に合わせた正規表現
+    
+    # --- Regex修正のポイント ---
+    # 1. "Train" だけでなく "Tr" に対応
+    # 2. "Test" だけでなく "MA" に対応 (これがTestとして扱われます)
+    # 3. F1スコアが省略されている場合 (?: ...)? に対応 (なければ0.0)
     regex = re.compile(
-        r"Ep\s+(\d+):.*?Train\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
-        r"Val\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
-        r"Test\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]",
+        r"Ep\s+(\d+):.*?"
+        # Train part: F1は省略可能とする
+        r"(?:Train|Tr)\s+\[NLL\s+([-\d\.eE]+)(?:\s+F1\s+([-\d\.eE]+))?\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
+        # Val part: F1は省略可能とする
+        r"Val\s+\[NLL\s+([-\d\.eE]+)(?:\s+F1\s+([-\d\.eE]+))?\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
+        # Test/MA part: "MA" または "Test"
+        r"(?:Test|MA)\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]",
         re.IGNORECASE,
     )
     
@@ -74,19 +75,44 @@ def parse_log_file(log_path):
             match = regex.search(line)
             if not match:
                 continue
-            values = list(map(float, match.groups()[1:]))
+            
+            # グループの取得 (Noneの場合は0.0にする)
+            epoch = int(match.group(1))
+            
+            # Train
+            t_nll = float(match.group(2))
+            t_f1  = float(match.group(3)) if match.group(3) else 0.0 # Missing F1 -> 0.0
+            t_acc = float(match.group(4))
+            
+            # Val
+            v_nll = float(match.group(5))
+            v_f1  = float(match.group(6)) if match.group(6) else 0.0 # Missing F1 -> 0.0
+            v_acc = float(match.group(7))
+            
+            # Test (MA)
+            test_nll = float(match.group(8))
+            test_f1  = float(match.group(9))
+            test_acc = float(match.group(10))
+
             epoch_rows.append(
                 {
-                    "epoch": int(match.group(1)),
-                    "train": {"nll": values[0], "f1": values[1], "acc": values[2]},
-                    "val": {"nll": values[3], "f1": values[4], "acc": values[5]},
-                    "test": {"nll": values[6], "f1": values[7], "acc": values[8]},
+                    "epoch": epoch,
+                    "train": {"nll": t_nll, "f1": t_f1, "acc": t_acc},
+                    "val":   {"nll": v_nll, "f1": v_f1, "acc": v_acc},
+                    "test":  {"nll": test_nll, "f1": test_f1, "acc": test_acc},
                 }
             )
+            
+    if not epoch_rows:
+        print(f"警告: 有効なログ行が見つかりませんでした: {log_path}")
+        
     return epoch_rows
 
 
 def plot_metrics(rows, log_path, output_dir=None):
+    if not rows:
+        return
+
     epochs = [row["epoch"] for row in rows]
     metrics = [("NLL", "nll"), ("F1", "f1"), ("Acc", "acc")]
 
@@ -103,7 +129,7 @@ def plot_metrics(rows, log_path, output_dir=None):
     for idx, (title, key) in enumerate(metrics):
         axes[idx].plot(epochs, [row["train"][key] for row in rows], label="Train")
         axes[idx].plot(epochs, [row["val"][key] for row in rows], label="Val")
-        axes[idx].plot(epochs, [row["test"][key] for row in rows], label="Test")
+        axes[idx].plot(epochs, [row["test"][key] for row in rows], label="Test (MA)") # ラベル変更
         axes[idx].set_title(title)
         axes[idx].set_xlabel("Epoch")
         axes[idx].grid(True, linestyle="--", alpha=0.3)
@@ -124,12 +150,12 @@ def main():
     parser.add_argument('--nma', action='store_true')
     parser.add_argument('--output_dir', default=None, type=str)
     
-    parser.add_argument('--modality', default='multimodal', type=str, help='特定モダリティのログだけ可視化')
+    parser.add_argument('--modality', default='multimodal', type=str)
     
     # アブレーション & EDL用フラグ
     parser.add_argument('--simple_nn', action='store_true')
     parser.add_argument('--standard_gnn', action='store_true')
-    parser.add_argument('--edl_r2', action='store_true') # ★追加
+    parser.add_argument('--edl_r2', action='store_true')
 
     args = parser.parse_args()
 
@@ -141,7 +167,6 @@ def main():
     
     if not log_files:
         print(f"対象ログが見つかりません。")
-        print(f"条件: Seed={args.seed}, NMA={args.nma}, Modality={args.modality}, EDL(R2)={args.edl_r2}")
         return
 
     out_dir = args.output_dir
@@ -149,10 +174,8 @@ def main():
         out_dir = os.path.join(args.log_dir, out_dir)
 
     for log_path in log_files:
+        print(f"Processing: {log_path}")
         rows = parse_log_file(log_path)
-        if not rows:
-            print(f"エポック情報を解析できませんでした: {log_path}")
-            continue
         plot_metrics(rows, log_path, out_dir)
 
 
