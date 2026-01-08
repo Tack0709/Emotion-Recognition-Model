@@ -7,17 +7,16 @@ import random
 import os
 
 class MultimodalDAGDataset(Dataset):
-    # ★修正: nma_only 引数を追加 (デフォルトFalse)
-    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5, nma=False, nma_only=False):
+    def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5, nma=False):
         self.speaker_vocab = speaker_vocab
         self.args = args
         self.nma = nma
-        self.nma_only = nma_only # ★追加: これがTrueならNMAデータだけを使う
+        # self.nma_only = nma_only  <-- 削除: 常に全データをロードするため不要
         
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
 
-        print(f"Loading {split} data (NMA={self.nma}, NMA_ONLY={self.nma_only})...")
+        print(f"Loading {split} data (NMA flag={self.nma})...")
 
         self.bert_features = np.load(os.path.join(data_dir, 'bert-base-diag.npy'), allow_pickle=True).item()
         self.w2v2_features = np.load(os.path.join(data_dir, 'w2v2-ft-diag.npy'), allow_pickle=True).item()
@@ -72,23 +71,16 @@ class MultimodalDAGDataset(Dataset):
         labels_soft_list = []
         speakers_list = []
         utterances_list = []
+        hard_labels_list = [] # ★追加
 
         for utt_id in utt_ids:
             hard_label = self.hard_labels.get(utt_id, -1)
             
             # ==========================================================
-            # ★修正: データのフィルタリングロジック
+            # ★修正: フィルタリングを削除し、全てのデータをロードする
             # ==========================================================
-            
-            # ケース1: NMAモードではない (通常) -> NMAデータ('xxx'=5) をスキップ
-            if not self.nma and hard_label == 5:
-                continue
-
-            # ケース2: NMA_ONLYモード -> MAデータ(0~4) をスキップ
-            # (NMAデータだけを集めたい場合)
-            if self.nma_only and hard_label != 5:
-                continue
-
+            # if not self.nma and hard_label == 5: continue
+            # if self.nma_only and hard_label != 5: continue
             # ==========================================================
 
             bert_feat = self.bert_features.get(utt_id)
@@ -100,6 +92,7 @@ class MultimodalDAGDataset(Dataset):
             features_text_list.append(bert_feat)
             features_audio_list.append(w2v2_feat)
 
+            # ソフトラベルの処理
             soft_label_vec = self.soft_labels.get(utt_id)
             if soft_label_vec is None or hard_label == -1:
                 labels_soft_list.append(np.array([-1.0] * 5))
@@ -114,6 +107,7 @@ class MultimodalDAGDataset(Dataset):
             speakers_list.append(self.speaker_vocab['stoi'].get(speaker_char, 0))
 
             utterances_list.append(self.text_dict.get(utt_id, ""))
+            hard_labels_list.append(hard_label) # ★追加
 
         if not speakers_list:
              return None 
@@ -123,7 +117,8 @@ class MultimodalDAGDataset(Dataset):
                torch.FloatTensor(np.array(labels_soft_list)), \
                speakers_list, \
                len(speakers_list), \
-               utterances_list
+               utterances_list, \
+               torch.LongTensor(np.array(hard_labels_list)) # ★追加: ハードラベルを返す
 
     def __len__(self):
         return self.len
@@ -163,7 +158,7 @@ class MultimodalDAGDataset(Dataset):
     def collate_fn(self, batch):
         batch = [d for d in batch if d is not None]
         if not batch:
-            return None, None, None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None, None # +1 for hard_labels
 
         max_dialog_len = max([d[4] for d in batch])
         
@@ -177,5 +172,8 @@ class MultimodalDAGDataset(Dataset):
         lengths = torch.LongTensor([d[4] for d in batch])
         speakers = pad_sequence([torch.LongTensor(d[3]) for d in batch], batch_first = True, padding_value = -1)
         utterances = [d[5] for d in batch]
+        
+        # ★追加: ハードラベルのパディング（パディング値は -1 とする）
+        hard_labels = pad_sequence([d[6] for d in batch], batch_first = True, padding_value = -1)
 
-        return features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances
+        return features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances, hard_labels

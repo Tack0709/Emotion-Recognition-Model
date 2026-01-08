@@ -132,49 +132,21 @@ if __name__ == '__main__':
     batch_size = args.batch_size
     
     # =========================================================================
-    # ★修正: ローダーを明確に分離
+    # ★修正: ローダーの取得
     # =========================================================================
     
-    # 1. 学習用: MAのみ (nma=False, nma_only=False)
-    logger.info("Loading Training Data (MA Only)...")
-    train_loader, valid_loader, _, speaker_vocab, label_vocab = get_multimodal_loaders(
+    logger.info("Loading Data...")
+    # nmaフラグは渡すが、dataset.py内でのフィルタリングは無効化されている前提
+    train_loader, valid_loader, test_loader, speaker_vocab, label_vocab = get_multimodal_loaders(
         data_dir=args.data_dir, 
         batch_size=batch_size, 
         num_workers=0, 
         args=args,
         test_session=args.test_session,
         dev_ratio=args.dev_ratio,
-        nma=False,      # MAデータを含める
-        nma_only=False  # NMAだけにしない
+        nma=args.nma 
     )
     
-    # 2. テスト用(MA): MAのみ
-    logger.info("Loading MA Test Data...")
-    _, _, test_loader_ma, _, _ = get_multimodal_loaders(
-        data_dir=args.data_dir, 
-        batch_size=batch_size, 
-        num_workers=0, 
-        args=args,
-        test_session=args.test_session,
-        dev_ratio=args.dev_ratio,
-        nma=False, 
-        nma_only=False
-    )
-    
-    # 3. テスト用(NMA): NMAのみ (フラグがある場合)
-    test_loader_nma = None
-    if args.nma:
-        logger.info("Loading NMA Test Data (NMA Only)...")
-        _, _, test_loader_nma, _, _ = get_multimodal_loaders(
-            data_dir=args.data_dir, 
-            batch_size=batch_size, 
-            num_workers=0, 
-            args=args,
-            test_session=args.test_session,
-            dev_ratio=args.dev_ratio,
-            nma=True,      # NMAデータを含める
-            nma_only=True  # ★MAデータを排除してNMAだけにする
-        )
     # =========================================================================
 
     n_classes = len(label_vocab['itos'])
@@ -208,37 +180,33 @@ if __name__ == '__main__':
         
     best_epoch = -1
     
-    # 保存用変数 (MAとNMAを分ける)
     best_res_ma = None
     best_res_nma = None
 
     for e in range(n_epochs):
         start_time = time.time()
 
-        # Train
-        t_loss, t_nll, t_acc, _, _, t_f1, _, _, _ = train_or_eval_model(
+        # Train (trainer内でXXXのLossはゼロ化される)
+        t_loss, t_nll, t_acc, _, _, t_f1, _, _, _, _ = train_or_eval_model(
             model, criterion, train_loader, e, cuda, args, optimizer, scheduler, True
         )
         
-        # Validation (MAのみで行うのが一般的)
-        v_loss, v_nll, v_acc, _, _, v_f1, _, _, _ = train_or_eval_model(
+        # Validation
+        v_loss, v_nll, v_acc, _, _, v_f1, _, _, _, _ = train_or_eval_model(
             model, criterion, valid_loader, e, cuda, args
         )
         
-        # Test (MA)
-        ma_loss, ma_nll, ma_acc, ma_labels, ma_preds, ma_f1, ma_probs, ma_softs, ma_texts = train_or_eval_model(
-            model, criterion, test_loader_ma, e, cuda, args
+        # Test
+        ma_loss, ma_nll, ma_acc, ma_labels, ma_preds, ma_f1, ma_probs, ma_softs, ma_texts, nma_results = train_or_eval_model(
+            model, criterion, test_loader, e, cuda, args
         )
         
-        # Test (NMA) - もしあれば
+        # NMAのログ文字列作成
         nma_log_str = ""
-        if test_loader_nma:
-            nma_loss, nma_nll, nma_acc, nma_labels, nma_preds, nma_f1, nma_probs, nma_softs, nma_texts = train_or_eval_model(
-                model, criterion, test_loader_nma, e, cuda, args
-            )
-            nma_log_str = f" | NMA [NLL {nma_nll:.4f}]" # NMAはAccuracyを見ても仕方ないのでNLL中心に
+        if args.nma and nma_results:
+            nma_log_str = f" | NMA [NLL {nma_results['nll']:.4f} Cnt {nma_results['count']}]"
         
-        # ログ表示 (MAの結果 + NMAの結果)
+        # ログ表示
         logger.info(
             f"Ep {e+1}: "
             f"Tr [NLL {t_nll:.3f} Acc {t_acc:.1f}] | "
@@ -248,7 +216,7 @@ if __name__ == '__main__':
             f"Time {time.time() - start_time:.1f}s"
         )
 
-        # ベストモデル更新判定 (Validation Scoreに基づく)
+        # ベストモデル更新判定 (MAのみに基づく)
         is_best = False
         if args.eval_metric == 'loss':
             if v_nll < best_val_score:
@@ -271,12 +239,16 @@ if __name__ == '__main__':
             }
             
             # NMAの結果も保存
-            if test_loader_nma:
+            if args.nma and nma_results:
                 best_res_nma = {
                     'epoch': best_epoch, 'fold': args.test_session,
-                    'f1': nma_f1, 'nll': nma_nll, 'acc': nma_acc,
-                    'true_ids': nma_labels, 'pred_ids': nma_preds,
-                    'pred_probs': nma_probs, 'true_softs': nma_softs, 'texts': nma_texts
+                    'nll': nma_results['nll'], 
+                    'count': nma_results['count'],
+                    'true_ids': nma_results['labels'], # ★追加: ラベル（全て5）
+                    'pred_ids': nma_results['preds'],
+                    'pred_probs': nma_results['probs'], # ★追加: 分布
+                    'true_softs': nma_results['softs'], # ★追加: ソフトラベル
+                    'texts': nma_results['texts']       # ★追加: テキスト
                 }
 
     logger.info('finish training!')

@@ -22,7 +22,7 @@ RUN_BASELINE=false     # 既存手法: DAG-ERC (元のまま)
 # --- モード設定 ---
 # "default": 学習=MA, テスト=MA
 # "nma":     学習=MA, テスト=MA & NMA
-MODES=("nma") 
+MODES=("default" "nma") 
 
 # --- モダリティ設定 ---
 # EDL(R2) は multimodal のみ対応しています
@@ -30,7 +30,7 @@ MODALITIES=("multimodal")
 # MODALITIES=("multimodal" "text" "audio") # ベースラインなら他も可
 
 # データ前処理を実行するか (初回のみ true)
-RUN_PREPROCESSING=true
+RUN_PREPROCESSING=false
 
 echo "=========================================================="
 echo "       IEMOCAP Emotion Recognition Experiment"
@@ -125,8 +125,3 @@ for mode in "${MODES[@]}"; do
             "${mode_args[@]}"
     done
 done
-
-echo ""
-echo "=========================================================="
-echo "          All Experiments Completed Successfully!"
-echo "=========================================================="
