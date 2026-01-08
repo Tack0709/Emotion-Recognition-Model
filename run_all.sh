@@ -18,12 +18,13 @@ python create_wav2vec_features.py
 echo ""
 echo "[Phase 2] Starting 5-Fold Cross Validation..."
 
-SEED=100
+SEED=20
 EPOCHS=100
 EVAL_METRIC=loss
 FOLDS=(1 2 3 4 5)
 MODES=("default" "nma")
-MODALITIES=("multimodal" "text" "audio")
+#MODALITIES=("multimodal" "text" "audio")
+MODALITIES=("multimodal")
 
 for mode in "${MODES[@]}"; do
     mode_args=()
