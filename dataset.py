@@ -7,11 +7,10 @@ import random
 import os
 
 class MultimodalDAGDataset(Dataset):
-    # <--- 修正: nma 引数を追加 (デフォルトFalse)
     def __init__(self, split='train', speaker_vocab=None, args=None, data_dir='output_data', dev_ratio=0.1, test_session=5, nma=False):
         self.speaker_vocab = speaker_vocab
         self.args = args
-        self.nma = nma # <--- フラグを保存
+        self.nma = nma
         
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Data directory '{data_dir}' not found.")
@@ -69,13 +68,14 @@ class MultimodalDAGDataset(Dataset):
         features_text_list = []
         features_audio_list = []
         labels_soft_list = []
+        labels_hard_list = [] # ★追加
         speakers_list = []
         utterances_list = []
 
         for utt_id in utt_ids:
             hard_label = self.hard_labels.get(utt_id, -1)
             
-            # <--- 修正: NMAフラグが立っていない場合のみ 'xxx'(5) をスキップ
+            # Default時(nma=False)はXXX(5)をここで除外
             if not self.nma and hard_label == 5:
                 continue
 
@@ -88,13 +88,15 @@ class MultimodalDAGDataset(Dataset):
             features_text_list.append(bert_feat)
             features_audio_list.append(w2v2_feat)
 
+            # ★追加: ハードラベルを保存
+            labels_hard_list.append(hard_label)
+
             soft_label_vec = self.soft_labels.get(utt_id)
             if soft_label_vec is None or hard_label == -1:
                 labels_soft_list.append(np.array([-1.0] * 5))
             else:
                 label_sum = np.sum(soft_label_vec)
                 if label_sum > 0:
-                    # NMAの場合もソフトラベル（分布）は存在するためそのまま使用
                     labels_soft_list.append(soft_label_vec / label_sum)
                 else:
                     labels_soft_list.append(np.array([-1.0] * 5))
@@ -110,6 +112,7 @@ class MultimodalDAGDataset(Dataset):
         return torch.FloatTensor(np.array(features_text_list)), \
                torch.FloatTensor(np.array(features_audio_list)), \
                torch.FloatTensor(np.array(labels_soft_list)), \
+               torch.LongTensor(np.array(labels_hard_list)), \
                speakers_list, \
                len(speakers_list), \
                utterances_list
@@ -117,6 +120,7 @@ class MultimodalDAGDataset(Dataset):
     def __len__(self):
         return self.len
 
+    # get_adj_v1, get_s_mask は変更なし（省略）
     def get_adj_v1(self, speakers, max_dialog_len):
         adj = []
         for speaker in speakers:
@@ -152,19 +156,23 @@ class MultimodalDAGDataset(Dataset):
     def collate_fn(self, batch):
         batch = [d for d in batch if d is not None]
         if not batch:
-            return None, None, None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None, None
 
-        max_dialog_len = max([d[4] for d in batch])
+        max_dialog_len = max([d[5] for d in batch]) # lenはindex 5
         
         features_text = pad_sequence([d[0] for d in batch], batch_first = True)
         features_audio = pad_sequence([d[1] for d in batch], batch_first = True)
         labels_soft = pad_sequence([d[2] for d in batch], batch_first = True, padding_value = -1.0)
-
-        adj = self.get_adj_v1([d[3] for d in batch], max_dialog_len)
-        s_mask, s_mask_onehot = self.get_s_mask([d[3] for d in batch], max_dialog_len)
         
-        lengths = torch.LongTensor([d[4] for d in batch])
-        speakers = pad_sequence([torch.LongTensor(d[3]) for d in batch], batch_first = True, padding_value = -1)
-        utterances = [d[5] for d in batch]
+        # ★追加: ハードラベルのパディング (-1)
+        labels_hard = pad_sequence([d[3] for d in batch], batch_first = True, padding_value = -1)
 
-        return features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances
+        adj = self.get_adj_v1([d[4] for d in batch], max_dialog_len)
+        s_mask, s_mask_onehot = self.get_s_mask([d[4] for d in batch], max_dialog_len)
+        
+        lengths = torch.LongTensor([d[5] for d in batch])
+        speakers = pad_sequence([torch.LongTensor(d[4]) for d in batch], batch_first = True, padding_value = -1)
+        utterances = [d[6] for d in batch]
+
+        # 最後に labels_hard を追加して返す (index 9)
+        return features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances, labels_hard
