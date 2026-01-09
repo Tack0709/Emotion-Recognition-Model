@@ -19,7 +19,9 @@ class EDL_R2_Loss(nn.Module):
         """
         Args:
             alpha: モデル出力 (Batch, Class)。Evidence + 1 (正の値)。
-            target: 正解ラベル (Batch, Class)。Soft Label (確率分布) 推奨。
+            target: 正解ラベル (Batch, Class)。
+                    Datasetの修正により、EDL(R2)使用時は「投票数 (Counts)」が渡され、
+                    SoftNLL使用時は「確率値 (Probs)」が渡される可能性がある。
             epoch_num: 現在のエポック数 (1-indexed想定)
         """
         eps = 1e-8
@@ -29,17 +31,27 @@ class EDL_R2_Loss(nn.Module):
 
         # --- 1. NLL項 (Eq 11) ---
         # Log-Likelihood of Dirichlet: sum( y_k * (log(S) - log(alpha_k)) )
+        # targetが投票数(Counts)の場合、y_kとしてそのまま重みになるため正しい挙動となる。
+        # targetが確率値(Probs)の場合も、従来の重み付けとして機能する。
         log_term = torch.log(S + eps) - torch.log(alpha + eps)
         loss_nll = torch.sum(target * log_term, dim=1).mean()
 
         # --- 2. R2 正則化項 (Eq 13) ---
         # KL( target || E[eta] )
+        # KLダイバージェンスの計算には、ターゲットが確率分布(合計1)である必要がある。
+        # そのため、targetが投票数(Counts)の場合は正規化を行う。
+        
+        target_sum = torch.sum(target, dim=1, keepdim=True)
+        # ゼロ除算回避 (合計が0のデータが万が一あった場合用)
+        target_prob = target / (target_sum + 1e-8)
+        
         # E[eta] = alpha / S
         expected_p = alpha / (S + eps)
         log_expected_p = torch.log(expected_p + eps)
         
-        # KLDivLoss (reduction='batchmean' はバッチサイズで割ってくれる)
-        loss_r2 = F.kl_div(log_expected_p, target, reduction='batchmean')
+        # KLDivLoss (reduction='batchmean')
+        # target_prob は確率分布化されているため安全に計算可能
+        loss_r2 = F.kl_div(log_expected_p, target_prob, reduction='batchmean')
 
         # --- 3. Annealing ---
         if self.annealing_step > 0:

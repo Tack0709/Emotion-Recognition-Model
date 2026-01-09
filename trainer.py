@@ -94,7 +94,21 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
                     
                     single_log_prob = log_prob[i][j]
                     single_label = labels_soft[i][j]
-                    single_nll = -torch.sum(single_label * single_log_prob).item()
+                    
+                    # === 【修正箇所】 NLL計算時のみ、投票数を確率に正規化する ===
+                    # 学習(Loss)では投票数を使うが、表示用NLLは確率分布との距離で見たい場合
+                    if args.edl_r2:
+                        label_sum = single_label.sum()
+                        if label_sum > 0:
+                            single_label_norm = single_label / label_sum
+                        else:
+                            single_label_norm = single_label
+                        
+                        single_nll = -torch.sum(single_label_norm * single_log_prob).item()
+                    else:
+                        # 既存のロジック (元々確率値が入っている場合)
+                        single_nll = -torch.sum(single_label * single_log_prob).item()
+                    
                     nlls.append(single_nll)
                     
                     if not train:

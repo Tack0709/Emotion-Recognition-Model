@@ -68,7 +68,7 @@ class MultimodalDAGDataset(Dataset):
         features_text_list = []
         features_audio_list = []
         labels_soft_list = []
-        labels_hard_list = [] # ★追加
+        labels_hard_list = []
         speakers_list = []
         utterances_list = []
 
@@ -88,7 +88,6 @@ class MultimodalDAGDataset(Dataset):
             features_text_list.append(bert_feat)
             features_audio_list.append(w2v2_feat)
 
-            # ★追加: ハードラベルを保存
             labels_hard_list.append(hard_label)
 
             soft_label_vec = self.soft_labels.get(utt_id)
@@ -97,7 +96,12 @@ class MultimodalDAGDataset(Dataset):
             else:
                 label_sum = np.sum(soft_label_vec)
                 if label_sum > 0:
-                    labels_soft_list.append(soft_label_vec / label_sum)
+                    # 修正: EDL(R2)フラグがある場合は投票数(Counts)を使用し、
+                    # そうでない場合(SoftNLL)は確率(Probabilities)を使用する
+                    if self.args and getattr(self.args, 'edl_r2', False):
+                        labels_soft_list.append(soft_label_vec)
+                    else:
+                        labels_soft_list.append(soft_label_vec / label_sum)
                 else:
                     labels_soft_list.append(np.array([-1.0] * 5))
             
@@ -120,7 +124,6 @@ class MultimodalDAGDataset(Dataset):
     def __len__(self):
         return self.len
 
-    # get_adj_v1, get_s_mask は変更なし（省略）
     def get_adj_v1(self, speakers, max_dialog_len):
         adj = []
         for speaker in speakers:
@@ -158,13 +161,12 @@ class MultimodalDAGDataset(Dataset):
         if not batch:
             return None, None, None, None, None, None, None, None, None, None
 
-        max_dialog_len = max([d[5] for d in batch]) # lenはindex 5
+        max_dialog_len = max([d[5] for d in batch])
         
         features_text = pad_sequence([d[0] for d in batch], batch_first = True)
         features_audio = pad_sequence([d[1] for d in batch], batch_first = True)
         labels_soft = pad_sequence([d[2] for d in batch], batch_first = True, padding_value = -1.0)
         
-        # ★追加: ハードラベルのパディング (-1)
         labels_hard = pad_sequence([d[3] for d in batch], batch_first = True, padding_value = -1)
 
         adj = self.get_adj_v1([d[4] for d in batch], max_dialog_len)
@@ -174,5 +176,4 @@ class MultimodalDAGDataset(Dataset):
         speakers = pad_sequence([torch.LongTensor(d[4]) for d in batch], batch_first = True, padding_value = -1)
         utterances = [d[6] for d in batch]
 
-        # 最後に labels_hard を追加して返す (index 9)
         return features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances, labels_hard
