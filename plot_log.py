@@ -4,7 +4,7 @@ import argparse
 import re
 import matplotlib.pyplot as plt
 
-def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2):
+def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma):
     # --- 1. アーキテクチャ名の決定 ---
     if edl_r2:
         arch_name = "edl_r2"
@@ -15,22 +15,26 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     else:
         arch_name = "dag_erc"
 
-    # --- 2. ディレクトリパスの構築 (run.pyと同じロジック) ---
+    # --- 2. ディレクトリパスの構築 ---
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
-    mode_dirname = 'nma' if nma else 'default'
     
-    # ベースパス: saved_models/seedXXX/default/
+    # ★修正: ディレクトリ選択ロジック
+    if train_ma_test_nma:
+        mode_dirname = 'ma2nma'
+    elif nma:
+        mode_dirname = 'nma'
+    else:
+        mode_dirname = 'default'
+    
+    # ベースパス: saved_models/seedXXX/[mode]/
     base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
 
     # フォルダ分けルールの適用
     if edl_r2:
-        # ★ ケース: EDL(R2) -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, 'edl_r2')
     elif modality == 'multimodal' and arch_name != 'dag_erc':
-        # ★ ケース: Multimodal かつ アブレーション -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
     else:
-        # ★ ケース: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ
         mod_pat = modality if modality else '*'
         target_dir_pattern = os.path.join(base_dir_pattern, mod_pat)
 
@@ -46,12 +50,16 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
         if seed is not None and f"seed{seed}" not in path and f"seed{seed}" not in os.path.dirname(path):
             continue
             
-        # NMAのフィルタリング
-        if nma:
+        # ★修正: NMA/MA2NMA の混同を防ぐフィルタリング
+        if train_ma_test_nma:
+            if 'ma2nma' not in path: continue
+        elif nma:
             if "_nma.log" not in path and "_nma_" not in path:
                 continue
         else:
             if "_nma.log" in path or "_nma_" in path:
+                continue
+            if 'ma2nma' in path: # 念のため
                 continue
                 
         files.append(path)
@@ -61,7 +69,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
 
 def parse_log_file(log_path):
     epoch_rows = []
-    # ログ形式に合わせた正規表現
     regex = re.compile(
         r"Ep\s+(\d+):.*?Train\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
         r"Val\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
@@ -123,25 +130,28 @@ def main():
     parser.add_argument('--seed', default=None, type=int)
     parser.add_argument('--nma', action='store_true')
     parser.add_argument('--output_dir', default=None, type=str)
-    
     parser.add_argument('--modality', default='multimodal', type=str, help='特定モダリティのログだけ可視化')
     
     # アブレーション & EDL用フラグ
     parser.add_argument('--simple_nn', action='store_true')
     parser.add_argument('--standard_gnn', action='store_true')
-    parser.add_argument('--edl_r2', action='store_true') # ★追加
+    parser.add_argument('--edl_r2', action='store_true')
+
+    # ★追加
+    parser.add_argument('--train_ma_test_nma', action='store_true')
 
     args = parser.parse_args()
 
     # ログファイルの検索
     log_files = find_log_files(
         args.log_dir, args.eval_metric, args.seed, args.nma, args.modality,
-        args.simple_nn, args.standard_gnn, args.edl_r2
+        args.simple_nn, args.standard_gnn, args.edl_r2,
+        args.train_ma_test_nma
     )
     
     if not log_files:
         print(f"対象ログが見つかりません。")
-        print(f"条件: Seed={args.seed}, NMA={args.nma}, Modality={args.modality}, EDL(R2)={args.edl_r2}")
+        print(f"条件: Seed={args.seed}, NMA={args.nma}, MA2NMA={args.train_ma_test_nma}, Modality={args.modality}")
         return
 
     out_dir = args.output_dir

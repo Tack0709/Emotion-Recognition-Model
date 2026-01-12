@@ -25,17 +25,23 @@ def load_vocab(data_dir):
 
     return speaker_vocab, label_vocab
 
-# <--- 修正: nma 引数を追加 (デフォルトFalse)
-def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False):
+def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False, train_nma=None, test_nma=None):
     print('building vocab.. ')
     speaker_vocab, label_vocab = load_vocab(data_dir)
     
-    print(f'building datasets for Session {test_session} as Test (Dev Ratio: {dev_ratio}, NMA: {nma})...')
+    # 引数の整理: 個別の指定がない場合は nma (全体設定) に従う
+    if train_nma is None: train_nma = nma
+    if test_nma is None: test_nma = nma
+
+    print(f'building datasets for Session {test_session} as Test (Dev Ratio: {dev_ratio}).')
+    print(f'  [Config] Train NMA: {train_nma} | Test NMA: {test_nma}')
     
-    # <--- 修正: nma を渡す
-    trainset = MultimodalDAGDataset(split='train', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma)
-    devset = MultimodalDAGDataset(split='dev', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma)
-    testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=nma)
+    # split='train', 'dev' には train_nma を適用
+    trainset = MultimodalDAGDataset(split='train', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=train_nma)
+    devset = MultimodalDAGDataset(split='dev', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=train_nma)
+    
+    # split='test' には test_nma を適用
+    testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=test_nma)
     
     train_sampler = get_train_valid_sampler(trainset)
     valid_sampler = get_train_valid_sampler(devset)

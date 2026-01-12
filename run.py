@@ -10,7 +10,7 @@ import copy
 from dataloader import get_multimodal_loaders
 from model import DAGERC_multimodal
 from trainer import train_or_eval_model
-from loss import EDL_R2_Loss  # ★追加: loss.pyからインポート
+from loss import EDL_R2_Loss
 
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
@@ -55,6 +55,9 @@ if __name__ == '__main__':
     parser.add_argument('--log_file_name', type=str, default=None)
     parser.add_argument('--dev_ratio', type=float, default=0.2)
     parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
+    
+    # ★追加: 学習はMA、テストはNMAで行うためのフラグ
+    parser.add_argument('--train_ma_test_nma', action='store_true', help='Train on MA data (exclude XXX), but Test on NMA data (include XXX)')
 
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
@@ -89,7 +92,7 @@ if __name__ == '__main__':
     parser.add_argument('--simple_nn', action='store_true', help='Use Simple NN (No GNN, Context-free)')
     parser.add_argument('--standard_gnn', action='store_true', help='Use Standard GNN (Fully connected)')
     
-    # ★追加: EDL(R2)用フラグ
+    # EDL(R2)用フラグ
     parser.add_argument('--edl_r2', action='store_true', help='Use EDL(R2) Loss and Dirichlet distribution')
  
     args = parser.parse_args()
@@ -101,7 +104,21 @@ if __name__ == '__main__':
     if not (args.use_text or args.use_audio):
         raise ValueError("少なくとも1つのモダリティを有効にしてください。")
     
-    # --- 前提条件のチェックとアーキテクチャ名の決定 ---
+    # --- モード設定の決定 ---
+    if args.train_ma_test_nma:
+        # 学習はMA(False)、テストはNMA(True)
+        train_nma_flag = False
+        test_nma_flag = True
+        mode_dir_name = 'ma2nma'
+        logger_suffix = "" 
+    else:
+        # 通常モード（両方同じ）
+        train_nma_flag = args.nma
+        test_nma_flag = args.nma
+        mode_dir_name = 'nma' if args.nma else 'default'
+        logger_suffix = "_nma" if args.nma else ""
+
+    # --- アーキテクチャ名の決定 ---
     if args.edl_r2:
         if args.modality != 'multimodal' or args.simple_nn or args.standard_gnn:
             raise ValueError("エラー: --edl_r2 は multimodal かつ DAG-ERC (simple_nn/standard_gnnなし) の時のみ使用可能です。")
@@ -113,18 +130,16 @@ if __name__ == '__main__':
     else:
         arch_name = "dag_erc"
     
-    mode_dir = 'nma' if args.nma else 'default'
-    base_save_dir = os.path.join('saved_models', f'seed{args.seed}', mode_dir)
+    # --- 保存先ディレクトリの構築 ---
+    # base: saved_models/seedXXX/[default|nma|ma2nma]/
+    base_save_dir = os.path.join('saved_models', f'seed{args.seed}', mode_dir_name)
 
     # フォルダ分けルール
     if args.edl_r2:
-        # ★ EDL(R2)の場合: default/edl_r2/
         save_dir = os.path.join(base_save_dir, 'edl_r2')
     elif args.modality == 'multimodal' and arch_name != 'dag_erc':
-        # アブレーション (simple_nn / standard_gnn)
         save_dir = os.path.join(base_save_dir, arch_name)
     else:
-        # 通常のDAG-ERC (multimodal/text/audio)
         save_dir = os.path.join(base_save_dir, args.modality)
     
     os.makedirs(save_dir, exist_ok=True)
@@ -132,12 +147,12 @@ if __name__ == '__main__':
     if args.log_file_name:
         log_file_path = os.path.join(save_dir, args.log_file_name)
     else:
-        nma_suffix = "_nma" if args.nma else ""
-        log_file_path = os.path.join(save_dir, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}{nma_suffix}.log')
+        log_file_path = os.path.join(save_dir, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}{logger_suffix}.log')
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
     logger.info(f'Architecture: {arch_name}')
+    logger.info(f'Mode Directory: {mode_dir_name}')
     logger.info(f'Evaluation Metric: {args.eval_metric}')
     logger.info(args)
 
@@ -152,21 +167,21 @@ if __name__ == '__main__':
         args=args,
         test_session=args.test_session,
         dev_ratio=args.dev_ratio,
-        nma=args.nma
+        nma=False, # default引数は無視されます
+        train_nma=train_nma_flag, # ★学習用設定
+        test_nma=test_nma_flag    # ★テスト用設定
     )
     
     n_classes = len(label_vocab['itos'])
     print('n_classes:', n_classes)
 
     print('building model..')
-    # n_classesを渡すように変更（model側で受け取れる場合）
     model = DAGERC_multimodal(args, n_classes)
     if cuda: model.cuda()
 
     # --- 損失関数の定義 ---
     if args.edl_r2:
         logger.info("Using EDL(R2) Loss")
-        # IEMOCAP: lambda_coef=0.8, CREMA-D: 0.2 (ここでは0.8で固定)
         criterion = EDL_R2_Loss(annealing_step=args.epochs, lambda_coef=0.8, device='cuda' if cuda else 'cpu')
     else:
         criterion = SoftNLLLoss(reduction='sum')
@@ -197,13 +212,17 @@ if __name__ == '__main__':
     for e in range(n_epochs):
         start_time = time.time()
 
-        # 戻り値のアンパックを統一
+        # ★学習・検証フェーズの設定を適用
+        args.nma = train_nma_flag 
         t_loss, t_nll, t_acc, _, _, t_f1, _, _, _ = train_or_eval_model(
             model, criterion, train_loader, e, cuda, args, optimizer, scheduler, True
         )
         v_loss, v_nll, v_acc, _, _, v_f1, _, _, _ = train_or_eval_model(
             model, criterion, valid_loader, e, cuda, args
         )
+        
+        # ★テストフェーズの設定を適用
+        args.nma = test_nma_flag
         test_loss, test_nll, test_acc, test_labels, test_preds, test_f1, test_probs, test_softs, test_texts = train_or_eval_model(
             model, criterion, test_loader, e, cuda, args
         )
@@ -235,7 +254,7 @@ if __name__ == '__main__':
             analysis_data = {
                 'epoch': best_epoch,
                 'fold': args.test_session,
-                'true_ids': test_labels,    # copy()不要 (trainerでリスト化済)
+                'true_ids': test_labels,
                 'pred_ids': test_preds,
                 'pred_probs': test_probs,
                 'true_softs': test_softs,

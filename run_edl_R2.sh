@@ -22,8 +22,8 @@ MODES=("default" "nma")
 # ==========================================================
 # 実行制御フラグ (ここを true/false で切り替え)
 # ==========================================================
-RUN_EDL_R2=true       # EDL(R2)を実行するか
-RUN_STANDARD_GNN=false # Standard GNN (Ablation) を実行するか
+RUN_EDL_R2=false      # EDL(R2)を実行するか
+RUN_STANDARD_GNN=true # Standard GNN (Ablation) を実行するか
 RUN_SIMPLE_NN=false    # Simple NN (Ablation) を実行するか
 
 # データ前処理を実行するか (初回のみtrue推奨)

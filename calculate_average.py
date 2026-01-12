@@ -6,7 +6,8 @@ import re
 
 def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, 
                       seed=None, nma=False, modality='multimodal', 
-                      simple_nn=False, standard_gnn=False, edl_r2=False):
+                      simple_nn=False, standard_gnn=False, edl_r2=False,
+                      train_ma_test_nma=False):
     """
     指定されたディレクトリ内のログファイルを読み込み、
     交差検証の平均スコア（F1, NLL, Acc）を計算して表示・保存する。
@@ -22,22 +23,26 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     else:
         arch_name = "dag_erc"
 
-    # --- 2. ターゲットディレクトリの特定 (run.pyと同じロジック) ---
+    # --- 2. ターゲットディレクトリの特定 ---
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
-    mode_dirname = 'nma' if nma else 'default'
     
-    # ベースパス: saved_models/seedXXX/default/
+    # ★修正: ディレクトリ選択ロジック
+    if train_ma_test_nma:
+        mode_dirname = 'ma2nma'
+    elif nma:
+        mode_dirname = 'nma'
+    else:
+        mode_dirname = 'default'
+    
+    # ベースパス: saved_models/seedXXX/[mode_dirname]/
     base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
 
     # フォルダ分けルールの適用
     if edl_r2:
-        # ★ ケース: EDL(R2) -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, 'edl_r2')
     elif modality == 'multimodal' and arch_name != 'dag_erc':
-        # ★ ケース: Multimodal かつ アブレーション -> 専用フォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
     else:
-        # ★ ケース: それ以外 (DAG-ERC または Text/Audio) -> モダリティフォルダ
         target_dir_pattern = os.path.join(base_dir_pattern, modality)
 
     # ログファイルの検索パターン構築
@@ -48,15 +53,19 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
 
     if not all_log_files:
         print(f"エラー: ログファイルが見つかりません: {search_path}")
-        print(f"検索条件 -> Arch: {arch_name}, Modality: {modality}, Seed: {seed}, NMA: {nma}")
+        print(f"検索条件 -> Arch: {arch_name}, Modality: {modality}, Seed: {seed}, NMA: {nma}, MA2NMA: {train_ma_test_nma}")
         return
 
     # --- 3. フィルタリング処理 ---
     log_files = []
     for f in all_log_files:
-        if nma:
+        # NMA/MA2NMA の混同を防ぐフィルタリング
+        if train_ma_test_nma:
+             # ma2nmaフォルダ以下のファイルならOK
+             if 'ma2nma' not in f: continue
+        elif nma:
             if "_nma.log" not in f and "_nma_" not in f: 
-                 pass 
+                 continue
         else:
             if "_nma.log" in f or "_nma_" in f:
                 continue
@@ -172,7 +181,10 @@ if __name__ == "__main__":
     # アブレーション & EDL用フラグ
     parser.add_argument('--simple_nn', action='store_true')
     parser.add_argument('--standard_gnn', action='store_true')
-    parser.add_argument('--edl_r2', action='store_true') # ★追加
+    parser.add_argument('--edl_r2', action='store_true')
+    
+    # ★追加
+    parser.add_argument('--train_ma_test_nma', action='store_true')
     
     args = parser.parse_args()
     
@@ -185,5 +197,6 @@ if __name__ == "__main__":
         modality=args.modality,
         simple_nn=args.simple_nn,
         standard_gnn=args.standard_gnn,
-        edl_r2=args.edl_r2
+        edl_r2=args.edl_r2,
+        train_ma_test_nma=args.train_ma_test_nma
     )
