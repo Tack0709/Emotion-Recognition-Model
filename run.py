@@ -3,8 +3,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 import numpy as np, argparse, time, random, logging
 import torch
 import torch.nn as nn
-from torch.optim import AdamW
-from transformers import get_linear_schedule_with_warmup
+# ★変更: Adafactor を追加
+from transformers import get_linear_schedule_with_warmup, Adafactor
 import copy
 
 from dataloader import get_multimodal_loaders
@@ -56,7 +56,7 @@ if __name__ == '__main__':
     parser.add_argument('--dev_ratio', type=float, default=0.2)
     parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
     
-    # ★追加: 学習はMA、テストはNMAで行うためのフラグ
+    # 学習はMA、テストはNMAで行うためのフラグ
     parser.add_argument('--train_ma_test_nma', action='store_true', help='Train on MA data (exclude XXX), but Test on NMA data (include XXX)')
 
     # GNN & Model params
@@ -68,7 +68,7 @@ if __name__ == '__main__':
     parser.add_argument('--windowp', type=int, default=1)
     parser.add_argument('--windowf', type=int, default=0)
     parser.add_argument('--max_grad_norm', type=float, default=5.0)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-4, help='Note: Ignored if using paper reproduction settings (Adafactor)')
     parser.add_argument('--dropout', type=float, default=0.2)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--epochs', type=int, default=50)
@@ -181,20 +181,37 @@ if __name__ == '__main__':
 
     # --- 損失関数の定義 ---
     if args.edl_r2:
-        logger.info("Using EDL(R2) Loss")
+        logger.info("Using EDL(R2) Loss (Lambda=0.8 for IEMOCAP)")
         criterion = EDL_R2_Loss(annealing_step=args.epochs, lambda_coef=0.8, device='cuda' if cuda else 'cpu')
     else:
         criterion = SoftNLLLoss(reduction='sum')
 
-    optimizer = AdamW(model.parameters() , lr=args.lr, weight_decay=1e-2)
+    # =============================================================================
+    # ★ 変更: Optimizerを論文(Appendix A)の設定に変更 (Adafactor)
+    # =============================================================================
+    # optimizer = AdamW(model.parameters() , lr=args.lr, weight_decay=1e-2)
+    
+    logger.info("Using Adafactor Optimizer (Paper Reproduction Settings)")
+    optimizer = Adafactor(
+        model.parameters(),
+        lr=8.84e-4,          # 論文設定: 8.84 x 10^-4
+        scale_parameter=False,
+        relative_step=False,
+        warmup_init=False
+    )
 
-    num_training_steps = len(train_loader) * args.epochs
-    num_warmup_steps = int(num_training_steps * 0.1)
+    # =============================================================================
+    # ★ 変更: Schedulerを論文の設定に変更 (200 warmup, 20k steps)
+    # =============================================================================
+    # num_training_steps = len(train_loader) * args.epochs
+    # num_warmup_steps = int(num_training_steps * 0.1)
+    
+    logger.info("Using Scheduler with Paper Settings (Warmup=200, Total=20000)")
     
     scheduler = get_linear_schedule_with_warmup(
         optimizer, 
-        num_warmup_steps=num_warmup_steps, 
-        num_training_steps=num_training_steps
+        num_warmup_steps=200,      # 論文設定: 200 steps
+        num_training_steps=20000   # 論文設定: 20k steps
     )
 
     if args.eval_metric == 'loss':
