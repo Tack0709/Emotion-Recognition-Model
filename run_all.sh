@@ -20,7 +20,7 @@ echo ""
 echo "[Phase 2] Starting 5-Fold Cross Validation..."
 
 # ================= 設定項目 =================
-SEED=20
+SEED=30
 EPOCHS=100
 EVAL_METRIC=loss
 
