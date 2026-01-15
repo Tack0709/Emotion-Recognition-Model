@@ -18,7 +18,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     # --- 2. ディレクトリパスの構築 ---
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
     
-    # ★修正: ディレクトリ選択ロジック
     if train_ma_test_nma:
         mode_dirname = 'ma2nma'
     elif nma:
@@ -26,10 +25,8 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     else:
         mode_dirname = 'default'
     
-    # ベースパス: saved_models/seedXXX/[mode]/
     base_dir_pattern = os.path.join(log_dir, seed_pattern, mode_dirname)
 
-    # フォルダ分けルールの適用
     if edl_r2:
         target_dir_pattern = os.path.join(base_dir_pattern, 'edl_r2')
     elif modality == 'multimodal' and arch_name != 'dag_erc':
@@ -38,7 +35,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
         mod_pat = modality if modality else '*'
         target_dir_pattern = os.path.join(base_dir_pattern, mod_pat)
 
-    # ログファイルの検索パターン
     file_pattern = f"logging_{eval_metric}_fold*.log"
     search_path = os.path.join(target_dir_pattern, file_pattern)
     
@@ -50,7 +46,6 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
         if seed is not None and f"seed{seed}" not in path and f"seed{seed}" not in os.path.dirname(path):
             continue
             
-        # ★修正: NMA/MA2NMA の混同を防ぐフィルタリング
         if train_ma_test_nma:
             if 'ma2nma' not in path: continue
         elif nma:
@@ -59,20 +54,37 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
         else:
             if "_nma.log" in path or "_nma_" in path:
                 continue
-            if 'ma2nma' in path: # 念のため
+            if 'ma2nma' in path:
                 continue
                 
         files.append(path)
         
     return sorted(files)
 
+def parse_metrics_inner(content_str):
+    """
+    文字列 "NLL 1.23 KL 0.45 F1 88.5" をパースして辞書にする
+    """
+    data = {}
+    parts = content_str.strip().split()
+    # キーと値のペアを取り出す
+    for i in range(0, len(parts), 2):
+        if i + 1 < len(parts):
+            key = parts[i]
+            val = parts[i+1]
+            try:
+                # 'Acc'などのキーもそのまま使う
+                data[key] = float(val)
+            except ValueError:
+                pass
+    return data
 
 def parse_log_file(log_path):
     epoch_rows = []
+    # 柔軟な正規表現: []の中身を非貪欲に取得する
+    # 例: Ep 1: Train [NLL 1.2 KL 0.3] | Val [NLL 1.5 KL 0.4] ...
     regex = re.compile(
-        r"Ep\s+(\d+):.*?Train\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
-        r"Val\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]\s+\|\s+"
-        r"Test\s+\[NLL\s+([-\d\.eE]+)\s+F1\s+([-\d\.eE]+)\s+Acc\s+([-\d\.eE]+)\]",
+        r"Ep\s+(\d+):.*?Train\s+\[(.*?)\]\s+\|\s+Val\s+\[(.*?)\]\s+\|\s+Test\s+\[(.*?)\]",
         re.IGNORECASE,
     )
     
@@ -81,21 +93,41 @@ def parse_log_file(log_path):
             match = regex.search(line)
             if not match:
                 continue
-            values = list(map(float, match.groups()[1:]))
+            
+            epoch = int(match.group(1))
+            train_str = match.group(2)
+            val_str = match.group(3)
+            test_str = match.group(4)
+            
             epoch_rows.append(
                 {
-                    "epoch": int(match.group(1)),
-                    "train": {"nll": values[0], "f1": values[1], "acc": values[2]},
-                    "val": {"nll": values[3], "f1": values[4], "acc": values[5]},
-                    "test": {"nll": values[6], "f1": values[7], "acc": values[8]},
+                    "epoch": epoch,
+                    "train": parse_metrics_inner(train_str),
+                    "val": parse_metrics_inner(val_str),
+                    "test": parse_metrics_inner(test_str),
                 }
             )
     return epoch_rows
 
 
 def plot_metrics(rows, log_path, output_dir=None):
+    if not rows:
+        return
+
     epochs = [row["epoch"] for row in rows]
-    metrics = [("NLL", "nll"), ("F1", "f1"), ("Acc", "acc")]
+    
+    # 最初の行に含まれるキー（指標名）をすべて取得してプロット対象にする
+    first_data = rows[0]["train"]
+    keys = list(first_data.keys()) # 例: ['NLL', 'KL', 'F1', 'Acc']
+    
+    # 表示順序を整える（見やすさのため）
+    priority_order = ['NLL', 'KL', 'F1', 'Acc']
+    metrics = sorted(keys, key=lambda k: priority_order.index(k) if k in priority_order else 999)
+
+    num_metrics = len(metrics)
+    if num_metrics == 0:
+        print(f"プロットすべき指標が見つかりませんでした: {log_path}")
+        return
 
     if output_dir:
         target_dir = output_dir if os.path.isabs(output_dir) else os.path.join(output_dir)
@@ -106,15 +138,20 @@ def plot_metrics(rows, log_path, output_dir=None):
     base_name = os.path.splitext(os.path.basename(log_path))[0]
     plot_path = os.path.join(target_dir, f"{base_name}.png")
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-    for idx, (title, key) in enumerate(metrics):
-        axes[idx].plot(epochs, [row["train"][key] for row in rows], label="Train")
-        axes[idx].plot(epochs, [row["val"][key] for row in rows], label="Val")
-        axes[idx].plot(epochs, [row["test"][key] for row in rows], label="Test")
-        axes[idx].set_title(title)
-        axes[idx].set_xlabel("Epoch")
-        axes[idx].grid(True, linestyle="--", alpha=0.3)
-        axes[idx].legend()
+    # 指標の数だけグラフを並べる
+    fig, axes = plt.subplots(1, num_metrics, figsize=(5 * num_metrics, 4))
+    if num_metrics == 1:
+        axes = [axes] # 配列化してループ処理を共通化
+
+    for idx, key in enumerate(metrics):
+        ax = axes[idx]
+        ax.plot(epochs, [row["train"].get(key, None) for row in rows], label="Train")
+        ax.plot(epochs, [row["val"].get(key, None) for row in rows], label="Val")
+        ax.plot(epochs, [row["test"].get(key, None) for row in rows], label="Test")
+        ax.set_title(key)
+        ax.set_xlabel("Epoch")
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.legend()
     
     fig.suptitle(base_name, fontsize=12)
     fig.tight_layout()
@@ -137,7 +174,6 @@ def main():
     parser.add_argument('--standard_gnn', action='store_true')
     parser.add_argument('--edl_r2', action='store_true')
 
-    # ★追加
     parser.add_argument('--train_ma_test_nma', action='store_true')
 
     args = parser.parse_args()
