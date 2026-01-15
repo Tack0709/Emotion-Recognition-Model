@@ -1,4 +1,6 @@
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from sklearn.metrics import f1_score, accuracy_score
 
@@ -7,10 +9,14 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
     preds = []
     labels = []
     nlls = []
+    kls = []  # ★追加: KLダイバージェンス記録用
     
     raw_probs = []
     raw_soft_labels = []
     text_data = []
+
+    # KLダイバージェンス計算用 (reduction='none'で個別に計算)
+    kl_criterion = nn.KLDivLoss(reduction='none')
 
     if train:
         model.train()
@@ -21,7 +27,6 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         if train:
             optimizer.zero_grad()
         
-        # アンパック (dataset.pyの修正に合わせて最後に labels_hard_gt を受け取る)
         features_text = data[0].cuda() if cuda else data[0]
         features_audio = data[1].cuda() if cuda else data[1]
         labels_soft = data[2].cuda() if cuda else data[2]
@@ -30,15 +35,15 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         s_mask_onehot = data[5].cuda() if cuda else data[5]
         lengths = data[6].cuda() if cuda else data[6]
         batch_utterances = data[8]
-        # ★追加: 真のハードラベル
         labels_hard_gt = data[9].cuda() if cuda else data[9]
         
         outputs = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths)
         
-        # --- Loss計算 (ここでは全データを使用) ---
+        # --- Loss計算 ---
         valid_mask = (labels_soft.select(2, 0) != -1.0).unsqueeze(2) 
         
         if args.edl_r2:
+            # EDLの場合の確率計算
             valid_alpha = outputs.masked_select(valid_mask).view(-1, 5) 
             valid_targets = labels_soft.masked_select(valid_mask).view(-1, 5)
             loss = loss_function(valid_alpha, valid_targets, epoch + 1)
@@ -48,6 +53,7 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
             prob = alpha / (sum_alpha + 1e-10)
             log_prob = torch.log(prob + 1e-10)
         else:
+            # 通常の場合
             prob = outputs
             log_prob = torch.log(prob + 1e-10)
             valid_log_prob = log_prob.masked_select(valid_mask).view(-1, 5)
@@ -64,52 +70,56 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
 
         losses.append(loss.item())
         
-        # --- 評価指標計算用の集計 (フィルタリング適用) ---
+        # --- 評価指標計算 ---
         p_hard = torch.argmax(prob, 2)
-        # ソフトラベルのArgmaxを「評価上の正解ラベル」とする (XXXの場合もこれで0~4の正解が決まる)
         l_hard = torch.where(labels_soft.sum(2) < -0.5, torch.tensor(-1).to(labels_soft.device), torch.argmax(labels_soft, 2))
         
         prob_cpu = prob.detach().cpu().numpy()
         ls_cpu = labels_soft.detach().cpu().numpy()
         
+        # ★追加: バッチ全体のKLを計算 (B, N, C) -> (B, N)
+        # input=log_prob, target=labels_soft
+        # labels_softが確率分布でない場合(カウント等)は正規化が必要
+        labels_soft_norm = labels_soft
+        if args.edl_r2: # EDLの場合はカウントが入る可能性があるので正規化
+             ls_sum = labels_soft.sum(dim=2, keepdim=True)
+             labels_soft_norm = labels_soft / (ls_sum + 1e-10)
+
+        # KL(P || Q) = sum(P * (log P - log Q)) = sum(target * (log target - input))
+        # PyTorchのKLDivLossは target * (log(target) - input) を計算する
+        # ここでは input が log_prob なのでそのまま渡せる
+        batch_kl_loss = kl_criterion(log_prob, labels_soft_norm).sum(dim=2) # クラス方向の合計 (B, N)
+        
         for i, seq in enumerate(l_hard.cpu().tolist()):
             for j, l in enumerate(seq):
                 if l != -1: # パディング以外
                     
-                    # ★追加: フィルタリングロジック
                     true_label_id = labels_hard_gt[i][j].item()
                     
                     if args.nma:
-                        # NMAモード: XXX(5) のみ評価する -> 5以外ならスキップ
-                        if true_label_id != 5:
-                            continue
+                        if true_label_id != 5: continue
                     else:
-                        # Defaultモード: Loaderから来るデータ(XXX以外)を全て評価
-                        # (dataset.pyで既にXXXは除外されているので、ここではチェック不要)
-                        pass
+                        pass # Defaultモード
 
-                    # 集計に追加
                     labels.append(l)
                     preds.append(p_hard[i][j].item())
                     
                     single_log_prob = log_prob[i][j]
                     single_label = labels_soft[i][j]
                     
-                    # === 【修正箇所】 NLL計算時のみ、投票数を確率に正規化する ===
-                    # 学習(Loss)では投票数を使うが、表示用NLLは確率分布との距離で見たい場合
+                    # NLL計算
                     if args.edl_r2:
                         label_sum = single_label.sum()
-                        if label_sum > 0:
-                            single_label_norm = single_label / label_sum
-                        else:
-                            single_label_norm = single_label
-                        
+                        single_label_norm = single_label / label_sum if label_sum > 0 else single_label
                         single_nll = -torch.sum(single_label_norm * single_log_prob).item()
                     else:
-                        # 既存のロジック (元々確率値が入っている場合)
                         single_nll = -torch.sum(single_label * single_log_prob).item()
                     
                     nlls.append(single_nll)
+                    
+                    # ★追加: KLの取得
+                    kl_val = batch_kl_loss[i][j].item()
+                    kls.append(kl_val)
                     
                     if not train:
                         raw_probs.append(prob_cpu[i][j])
@@ -119,13 +129,15 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
     if len(preds) > 0:
         avg_loss = np.mean(losses)
         avg_nll = np.mean(nlls)
+        avg_kl = np.mean(kls) # ★追加
         f1 = f1_score(labels, preds, average='weighted') * 100
         acc = accuracy_score(labels, preds) * 100
     else:
-        # 該当データがない場合（例: NMAモードだがXXXデータが1つもない場合など）
         avg_loss = np.mean(losses) if losses else 0.0
         avg_nll = 0.0
+        avg_kl = 0.0 # ★追加
         f1 = 0.0
         acc = 0.0
 
-    return avg_loss, avg_nll, acc, labels, preds, f1, raw_probs, raw_soft_labels, text_data
+    # 戻り値に avg_kl を追加 (4番目)
+    return avg_loss, avg_nll, acc, avg_kl, labels, preds, f1, raw_probs, raw_soft_labels, text_data

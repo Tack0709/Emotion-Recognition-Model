@@ -20,7 +20,7 @@ echo ""
 echo "[Phase 2] Starting 5-Fold Cross Validation..."
 
 # ================= 設定項目 =================
-SEED=30
+SEED=31
 EPOCHS=100
 EVAL_METRIC=loss
 
@@ -32,7 +32,7 @@ FOLDS=(1 2 3 4 5)
 # ============================================
 
 # モード配列 (ma2nma を含む)
-MODES=("default" "nma" "ma2nma")
+MODES=("nma")
 # MODES=("ma2nma") # テスト実行用（ma2nmaのみ実行したい場合）
 
 # モダリティ設定
