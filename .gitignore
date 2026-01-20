@@ -5,3 +5,4 @@ __pycache__/
 npy_text_results/
 saved_models/
 *.png
+seed30
