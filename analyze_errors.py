@@ -172,27 +172,47 @@ def analyze_errors(target_path, output_dir=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    # --- 1. 全件レポートの作成 ---
+    # --- 1. 平均値の計算 (ここを追加) ---
+    # Noneを除外してリスト化
+    valid_kls = [r['kl_div'] for r in all_results if r['kl_div'] is not None]
+    valid_t_ents = [r['t_entropy'] for r in all_results if r['t_entropy'] is not None]
+    valid_p_ents = [r['p_entropy'] for r in all_results if r['p_entropy'] is not None]
+
+    avg_kl = np.mean(valid_kls) if valid_kls else 0.0
+    avg_t_ent = np.mean(valid_t_ents) if valid_t_ents else 0.0
+    avg_p_ent = np.mean(valid_p_ents) if valid_p_ents else 0.0
+
+    # --- 2. 全件レポートの作成 ---
     accuracy = (total_correct / total_samples) * 100 if total_samples > 0 else 0
     top2_acc = (top2_correct / total_samples) * 100 if total_samples > 0 else 0
     
     report_path = os.path.join(output_dir, 'full_analysis_report.txt')
     
-    print(f"Total Samples: {total_samples}")
-    print(f"Overall Acc  : {accuracy:.2f}%")
-    print(f"Top-2 Acc    : {top2_acc:.2f}%")
+    print("-" * 30)
+    print(f"Total Samples  : {total_samples}")
+    print(f"Overall Acc    : {accuracy:.2f}%")
+    print(f"Top-2 Acc      : {top2_acc:.2f}%")
+    # コンソール出力に追加
+    print(f"Avg KL Div     : {avg_kl:.4f}")
+    print(f"Avg T-Entropy  : {avg_t_ent:.4f}")
+    print(f"Avg P-Entropy  : {avg_p_ent:.4f}")
+    print("-" * 30)
     print(f"Writing full report to {report_path} ...")
 
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(f"Full Analysis Report (All Utterances)\n")
         f.write(f"Source: {target_path}\n")
-        f.write(f"Overall Accuracy: {accuracy:.2f}% ({total_correct}/{total_samples})\n")
-        f.write(f"Top-2 Accuracy  : {top2_acc:.2f}% ({top2_correct}/{total_samples})\n")
+        f.write(f"Overall Accuracy : {accuracy:.2f}% ({total_correct}/{total_samples})\n")
+        f.write(f"Top-2 Accuracy   : {top2_acc:.2f}% ({top2_correct}/{total_samples})\n")
+        # ファイル出力に追加
+        f.write(f"Avg KL Divergence: {avg_kl:.4f}\n")
+        f.write(f"Avg T-Entropy    : {avg_t_ent:.4f} (Ambiguity of Ground Truth)\n")
+        f.write(f"Avg P-Entropy    : {avg_p_ent:.4f} (Uncertainty of Model)\n")
         f.write("="*80 + "\n")
         f.write("Legend:\n")
-        f.write("  [CORRECT]      : Prediction matched Ground Truth\n")
-        f.write("  [ERROR]        : Wrong prediction\n")
-        f.write("  (Top-2 Flip)   : Wrong, but Ground Truth was the 2nd highest probability\n")
+        f.write("  [CORRECT]       : Prediction matched Ground Truth\n")
+        f.write("  [ERROR]         : Wrong prediction\n")
+        f.write("  (Top-2 Flip)    : Wrong, but Ground Truth was the 2nd highest probability\n")
         f.write("="*80 + "\n\n")
 
         for idx, res in enumerate(all_results):
