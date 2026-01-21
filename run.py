@@ -56,8 +56,11 @@ if __name__ == '__main__':
     parser.add_argument('--dev_ratio', type=float, default=0.2)
     parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
     
-    # ★追加: 学習はMA、テストはNMAで行うためのフラグ
+    # ★既存: 学習はMA、テストはNMAで行うためのフラグ
     parser.add_argument('--train_ma_test_nma', action='store_true', help='Train on MA data (exclude XXX), but Test on NMA data (include XXX)')
+
+    # ★追加: 学習はNMA(MA+NMA)、テストはMAで行うためのフラグ
+    parser.add_argument('--train_nma_test_ma', action='store_true', help='Train on NMA data (include XXX), but Test on MA data (exclude XXX)')
 
     # GNN & Model params
     parser.add_argument('--hidden_dim', type=int, default=300)
@@ -111,6 +114,15 @@ if __name__ == '__main__':
         test_nma_flag = True
         mode_dir_name = 'ma2nma'
         logger_suffix = "" 
+    
+    # ★追加: --train_nma_test_ma が指定された場合の処理
+    elif args.train_nma_test_ma:
+        # 学習はNMA(True: XXX含む)、テストはMA(False: XXX除外)
+        train_nma_flag = True
+        test_nma_flag = False
+        mode_dir_name = 'nma2ma'  # 保存フォルダ名を区別
+        logger_suffix = "_nma2ma"
+
     else:
         # 通常モード（両方同じ）
         train_nma_flag = args.nma
@@ -131,7 +143,7 @@ if __name__ == '__main__':
         arch_name = "dag_erc"
     
     # --- 保存先ディレクトリの構築 ---
-    # base: saved_models/seedXXX/[default|nma|ma2nma]/
+    # base: saved_models/seedXXX/[default|nma|ma2nma|nma2ma]/
     base_save_dir = os.path.join('saved_models', f'seed{args.seed}', mode_dir_name)
 
     # フォルダ分けルール

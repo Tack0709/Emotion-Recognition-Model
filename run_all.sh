@@ -20,7 +20,7 @@ echo ""
 echo "[Phase 2] Starting 5-Fold Cross Validation..."
 
 # ================= 設定項目 =================
-SEED=31
+SEED=30
 EPOCHS=100
 EVAL_METRIC=loss
 
@@ -32,12 +32,12 @@ FOLDS=(1 2 3 4 5)
 # ============================================
 
 # モード配列 (ma2nma を含む)
-MODES=("nma")
-# MODES=("ma2nma") # テスト実行用（ma2nmaのみ実行したい場合）
+MODES=("default" "nma")
+MODES=("nma2ma") # テスト実行用（ma2nmaのみ実行したい場合）
 
 # モダリティ設定
-MODALITIES=("multimodal" "text" "audio")
-# MODALITIES=("multimodal")
+# MODALITIES=("multimodal" "text" "audio")
+MODALITIES=("multimodal")
 
 for mode in "${MODES[@]}"; do
     mode_args=()
@@ -47,6 +47,8 @@ for mode in "${MODES[@]}"; do
         mode_args+=(--nma)
     elif [ "$mode" = "ma2nma" ]; then
         mode_args+=(--train_ma_test_nma)
+    elif [ "$mode" = "nma2ma" ]; then
+        mode_args+=(--train_nma_test_ma)
     fi
 
     for modality in "${MODALITIES[@]}"; do
@@ -88,7 +90,18 @@ for mode in "${MODES[@]}"; do
             --seed "$SEED" \
             --modality "$modality" \
             "${mode_args[@]}"
-    done
+
+        echo ""
+        echo "[Phase 5] Analyzing Errors..."
+        # 保存先パスの指定
+        TARGET_DIR="saved_models/seed${SEED}/${mode}/${modality}"
+        
+        if [ -d "$TARGET_DIR" ]; then
+            python analyze_errors.py "$TARGET_DIR" --output_dir "$TARGET_DIR"
+        else
+            echo "Warning: Directory not found: $TARGET_DIR"
+        fi
+    done # modalityループの終わり
 done
 
 echo ""

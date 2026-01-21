@@ -4,7 +4,7 @@ import argparse
 import re
 import matplotlib.pyplot as plt
 
-def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma):
+def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma, train_nma_test_ma): # ★追加: 引数
     # --- 1. アーキテクチャ名の決定 ---
     if edl_r2:
         arch_name = "edl_r2"
@@ -18,8 +18,11 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     # --- 2. ディレクトリパスの構築 ---
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
     
+    # ★修正: ディレクトリ選択
     if train_ma_test_nma:
         mode_dirname = 'ma2nma'
+    elif train_nma_test_ma:      # ★追加: nma2ma
+        mode_dirname = 'nma2ma'
     elif nma:
         mode_dirname = 'nma'
     else:
@@ -48,13 +51,15 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
             
         if train_ma_test_nma:
             if 'ma2nma' not in path: continue
+        elif train_nma_test_ma: # ★追加
+            if 'nma2ma' not in path: continue
         elif nma:
             if "_nma.log" not in path and "_nma_" not in path:
                 continue
         else:
             if "_nma.log" in path or "_nma_" in path:
                 continue
-            if 'ma2nma' in path:
+            if 'ma2nma' in path or 'nma2ma' in path: # ★修正
                 continue
                 
         files.append(path)
@@ -175,6 +180,7 @@ def main():
     parser.add_argument('--edl_r2', action='store_true')
 
     parser.add_argument('--train_ma_test_nma', action='store_true')
+    parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
 
     args = parser.parse_args()
 
@@ -182,12 +188,12 @@ def main():
     log_files = find_log_files(
         args.log_dir, args.eval_metric, args.seed, args.nma, args.modality,
         args.simple_nn, args.standard_gnn, args.edl_r2,
-        args.train_ma_test_nma
+        args.train_ma_test_nma, args.train_nma_test_ma # ★追加
     )
     
     if not log_files:
         print(f"対象ログが見つかりません。")
-        print(f"条件: Seed={args.seed}, NMA={args.nma}, MA2NMA={args.train_ma_test_nma}, Modality={args.modality}")
+        print(f"条件: Seed={args.seed}, NMA={args.nma}, MA2NMA={args.train_ma_test_nma}, NMA2MA={args.train_nma_test_ma}, Modality={args.modality}")
         return
 
     out_dir = args.output_dir

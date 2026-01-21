@@ -27,7 +27,7 @@ RUN_STANDARD_GNN=true # Standard GNN (Ablation) を実行するか
 RUN_SIMPLE_NN=false    # Simple NN (Ablation) を実行するか
 
 # データ前処理を実行するか (初回のみtrue推奨)
-RUN_PREPROCESSING=true
+RUN_PREPROCESSING=false
 
 echo "=========================================================="
 echo "       IEMOCAP Experiment Runner"

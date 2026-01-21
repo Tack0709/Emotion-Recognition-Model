@@ -7,7 +7,7 @@ import re
 def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, 
                       seed=None, nma=False, modality='multimodal', 
                       simple_nn=False, standard_gnn=False, edl_r2=False,
-                      train_ma_test_nma=False):
+                      train_ma_test_nma=False, train_nma_test_ma=False): # ★追加: 引数
     """
     指定されたディレクトリ内のログファイルを読み込み、
     交差検証の平均スコア（F1, NLL, Acc）を計算して表示・保存する。
@@ -29,6 +29,8 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     # ★修正: ディレクトリ選択ロジック
     if train_ma_test_nma:
         mode_dirname = 'ma2nma'
+    elif train_nma_test_ma:      # ★追加: nma2maモード
+        mode_dirname = 'nma2ma'
     elif nma:
         mode_dirname = 'nma'
     else:
@@ -53,16 +55,17 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
 
     if not all_log_files:
         print(f"エラー: ログファイルが見つかりません: {search_path}")
-        print(f"検索条件 -> Arch: {arch_name}, Modality: {modality}, Seed: {seed}, NMA: {nma}, MA2NMA: {train_ma_test_nma}")
+        print(f"検索条件 -> Arch: {arch_name}, Modality: {modality}, Seed: {seed}, NMA: {nma}, MA2NMA: {train_ma_test_nma}, NMA2MA: {train_nma_test_ma}")
         return
 
     # --- 3. フィルタリング処理 ---
     log_files = []
     for f in all_log_files:
-        # NMA/MA2NMA の混同を防ぐフィルタリング
+        # ディレクトリ構造で既に絞り込まれているはずだが、念のためファイル名のチェック
         if train_ma_test_nma:
-             # ma2nmaフォルダ以下のファイルならOK
              if 'ma2nma' not in f: continue
+        elif train_nma_test_ma: # ★追加
+             if 'nma2ma' not in f: continue
         elif nma:
             if "_nma.log" not in f and "_nma_" not in f: 
                  continue
@@ -185,6 +188,7 @@ if __name__ == "__main__":
     
     # ★追加
     parser.add_argument('--train_ma_test_nma', action='store_true')
+    parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
     
     args = parser.parse_args()
     
@@ -198,5 +202,6 @@ if __name__ == "__main__":
         simple_nn=args.simple_nn,
         standard_gnn=args.standard_gnn,
         edl_r2=args.edl_r2,
-        train_ma_test_nma=args.train_ma_test_nma
+        train_ma_test_nma=args.train_ma_test_nma,
+        train_nma_test_ma=args.train_nma_test_ma # ★追加
     )

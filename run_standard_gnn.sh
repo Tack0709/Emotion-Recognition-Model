@@ -1,88 +1,115 @@
 #!/bin/bash
-set -e # エラーが発生したら停止
+set -e
 
-echo "=========================================="
-echo "      Standard GNN (Ablation Study)"
-echo "      5-Fold Cross Validation Script"
-echo "=========================================="
+echo "========================================================"
+echo "    Global MA -> NMA (Pattern 5) Experiment Script"
+echo "    - Text/Audio: Base Model Only"
+echo "    - Multimodal: Base + Standard GNN + EDL R2"
+echo "========================================================"
 
-# --- 1. データ前処理 ---
-# ※すでに完了している場合はコメントアウトしてください
-echo ""
-echo "[Phase 1] Data Preprocessing..."
-python create_label.py
-python create_metadata.py
-python create_bert_features.py
-python create_wav2vec_features.py
+# --- 設定項目 ---
+SEED=30
+EPOCHS=50            # 必要に応じて変更 (例: 100)
+BATCH_SIZE=32        # メモリに応じて調整
+LR=1e-4
+EVAL_METRIC="loss"
 
-# --- 2. 交差検証 (Fold 1-5) ---
-echo ""
-echo "[Phase 2] Starting 5-Fold Cross Validation..."
+# 実験するモダリティ
+MODALITIES=("text" "audio" "multimodal")
 
-SEED=100
-EPOCHS=100
-EVAL_METRIC=loss
+# 実験するモデル設定 ("表示名:フラグ")
+EXPERIMENTS=(
+    "Base::"                        # フラグなし (DAG-ERC)
+    "StandardGNN:--standard_gnn"    # Standard GNN
+    "EDL_R2:--edl_r2"               # EDL (R2)
+)
+
+# 交差検証のフォールド (テスト時は (5) のみでOK)
 FOLDS=(1 2 3 4 5)
 
-# Standard GNN は基本的に multimodal で比較実験する想定
-# 必要であれば "text" "audio" を追加してください
-MODALITIES=("multimodal")
+# 保存先ベースディレクトリ
+BASE_SAVE_DIR="saved_models/seed${SEED}/global_ma2nma"
 
-# 必要であれば "nma" も追加可能: MODES=("default" "nma")
-MODES=("default" "nma")
+# 前処理 (必要な場合のみ true)
+RUN_PREPROCESSING=false
+if [ "$RUN_PREPROCESSING" = true ]; then
+    echo "[Phase 0] Preprocessing..."
+    python create_label.py; python create_metadata.py
+    python create_bert_features.py; python create_wav2vec_features.py
+fi
 
-for mode in "${MODES[@]}"; do
-    mode_args=()
-    [ "$mode" = "nma" ] && mode_args+=(--nma)
+# --- 実験ループ ---
+for modality in "${MODALITIES[@]}"; do
+    echo ""
+    echo "#################################################"
+    echo "##### Target Modality: ${modality^^} #####"
+    echo "#################################################"
 
-    for modality in "${MODALITIES[@]}"; do
+    for exp in "${EXPERIMENTS[@]}"; do
+        IFS=':' read -r exp_name exp_flag <<< "$exp"
+
+        # 【制御ロジック】
+        # Multimodal 以外の場合、StandardGNN と EDL はスキップする
+        if [ "$modality" != "multimodal" ]; then
+            if [[ "$exp_flag" == *"--standard_gnn"* ]] || [[ "$exp_flag" == *"--edl_r2"* ]]; then
+                # echo "   Skipping ${exp_name} for ${modality} (Multimodal only)"
+                continue
+            fi
+        fi
+
         echo ""
-        echo "===== Mode: ${mode^^} | Modality: ${modality} | Arch: Standard GNN ====="
-        
-        # standard_gnn用フォルダの作成 (run.py内で作成されますが念のため)
-        mkdir -p "saved_models/seed${SEED}/${mode}/standard_gnn"
+        echo ">> Experiment: ${exp_name} (${modality})"
+        echo "-------------------------------------------------"
 
-        echo ""
-        echo "[Phase 2] Starting 5-Fold Cross Validation (Standard GNN)..."
-        for i in "${FOLDS[@]}"; do
-            echo ""
-            echo "--- Running Fold $i (Test Session $i) ---"
-            # ★ポイント: --standard_gnn フラグを追加しています
+        # コマンドライン引数の構築
+        cmd_args=(--global_ma_train_nma_test)
+        if [ -n "$exp_flag" ]; then
+            cmd_args+=($exp_flag)
+        fi
+
+        # [Phase 1] Training & Testing
+        for fold in "${FOLDS[@]}"; do
+            echo "   Running Fold ${fold}..."
+            # 実行 (ログを抑制したい場合は末尾に > /dev/null 2>&1 を追加)
             python run.py \
-                --standard_gnn \
-                --test_session "$i" \
+                --test_session "$fold" \
                 --eval_metric "$EVAL_METRIC" \
                 --epochs "$EPOCHS" \
+                --batch_size "$BATCH_SIZE" \
+                --lr "$LR" \
                 --seed "$SEED" \
                 --modality "$modality" \
-                "${mode_args[@]}"
+                "${cmd_args[@]}"
         done
 
-        # --- 3. 平均スコアの計算 ---
-        # calculate_average.py が standard_gnn のパスに対応している必要がありますが
-        # もし対応していない場合でも、ログファイルさえ正しく読めれば動作します
-        echo ""
-        echo "[Phase 3] Calculating Average Scores..."
-        python calculate_average.py \
-            --standard_gnn \
-            --eval_metric "$EVAL_METRIC" \
-            --seed "$SEED" \
-            --modality "$modality" \
-            "${mode_args[@]}"
+        # [Phase 2] Average & Plot
+        echo "   Calculating Average & Plotting..."
+        python calculate_average.py --eval_metric "$EVAL_METRIC" --seed "$SEED" --modality "$modality" --global_ma_train_nma_test $([ -n "$exp_flag" ] && echo "$exp_flag")
+        python plot_log.py --eval_metric "$EVAL_METRIC" --seed "$SEED" --modality "$modality" --global_ma_train_nma_test $([ -n "$exp_flag" ] && echo "$exp_flag")
 
-        # --- 4. ログのプロット ---
-        echo ""
-        echo "[Phase 4] Plotting Training Logs..."
-        python plot_log.py \
-            --standard_gnn \
-            --eval_metric "$EVAL_METRIC" \
-            --seed "$SEED" \
-            --modality "$modality" \
-            "${mode_args[@]}"
+        # [Phase 3] Error Analysis
+        # run.py (修正前オリジナル) の保存ロジックに合わせてパスを指定
+        if [[ "$exp_flag" == *"--edl_r2"* ]]; then
+            TARGET_DIR="${BASE_SAVE_DIR}/edl_r2"
+        elif [[ "$exp_flag" == *"--standard_gnn"* ]]; then
+            TARGET_DIR="${BASE_SAVE_DIR}/standard_gnn"
+        else
+            # Baseモデルの場合、run.pyはモダリティ名をフォルダ名にする
+            # text -> .../text
+            # audio -> .../audio
+            # multimodal -> .../multimodal (DAG-ERCの場合)
+            TARGET_DIR="${BASE_SAVE_DIR}/${modality}"
+        fi
+
+        if [ -d "$TARGET_DIR" ]; then
+            echo "   Analyzing Errors in: ${TARGET_DIR}"
+            python analyze_errors.py "$TARGET_DIR" --output_dir "$TARGET_DIR"
+        else
+            echo "   [Warning] Directory not found (Analysis skipped): ${TARGET_DIR}"
+        fi
+
     done
 done
 
 echo ""
-echo "=========================================="
-echo "          All Tasks Completed!"
-echo "=========================================="
+echo "=== All Experiments Completed ==="
