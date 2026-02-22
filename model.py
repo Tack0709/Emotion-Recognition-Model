@@ -158,7 +158,9 @@ class DAGERC_multimodal(nn.Module):
             # 隣接行列を「全結合(全部1)」にする
             # これにより、DAG（過去→未来のみ）の制約がなくなり、
             # 全ての発話が相互に接続された普通のGNNとして動作します。
-            adj = torch.ones_like(adj)
+            
+            # adj = torch.ones_like(adj)
+            adj = torch.tril(torch.ones_like(adj))
             
             # 話者マスクも無効化（全て1）して、話者関係の区別をなくす
             s_mask = torch.ones_like(s_mask)
