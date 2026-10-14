@@ -5,4 +5,5 @@ __pycache__/
 npy_text_results/
 saved_models/
 *.png
-seed30
+seed30_before_soturon
+before_soturon

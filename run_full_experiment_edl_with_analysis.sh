@@ -33,8 +33,7 @@ FOLDS=(1 2 3 4 5)
 # ============================================
 
 # モード設定: ("default" "nma" "ma2nma")
-#MODES=("default" "nma")
-MODES=("nma2ma") 
+MODES=("default" "ma2nma") # "nma2ma" は現在コメントアウト
 
 for mode in "${MODES[@]}"; do
     mode_args=()
@@ -44,8 +43,8 @@ for mode in "${MODES[@]}"; do
         mode_args+=(--nma)
     elif [ "$mode" = "ma2nma" ]; then
         mode_args+=(--train_ma_test_nma)
-    elif [ "$mode" = "nma2ma" ]; then
-        mode_args+=(--train_nma_test_ma)
+    # elif [ "$mode" = "nma2ma" ]; then
+    #     mode_args+=(--train_nma_test_ma)
     fi
 
     echo ""
@@ -59,10 +58,10 @@ for mode in "${MODES[@]}"; do
     # ==========================================================
     EXPERIMENTS=(
         # "DAG-ERC:text:"                       # 1. Text Only
-        "DAG-ERC:audio:"                      # 2. Audio Only
+        # "DAG-ERC:audio:"                      # 2. Audio Only
         # "DAG-ERC:multimodal:"                 # 3. Multimodal (Proposed)
         "Standard_GNN:multimodal:--standard_gnn" # 4. Standard GNN (Ablation)
-        "EDL_R2:multimodal:--edl_r2"          # 5. EDL R2 (Uncertainty Learning)
+        # "EDL_R2:multimodal:--edl_r2"          # 5. EDL R2 (Uncertainty Learning)
     )
 
     for exp_config in "${EXPERIMENTS[@]}"; do
