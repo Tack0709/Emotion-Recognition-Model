@@ -250,14 +250,21 @@ def diag_B_mass_matrix(probs, softs):
     仮説B: どのクラスからどのクラスへ確率質量が流れているか。
 
     行 = 正解クラス、列 = 予測クラス、値 = Σ_utt y_i * p_j を行方向に正規化。
-    argmax を使わないので tie-breaking の影響を受けない。
+    これは誤分類件数ではなく、正解分布の確率質量が予測分布へどう配分されたか
+    を表す期待値。argmax を使わないため tie-breaking の影響を受けない。
+    
+    さらに M_ideal = Σ_utt y_i * y_j を基準として差を出す。これは予測分布が
+    正解分布 y と一致した場合の配分で、曖昧な正解に由来するクラス間の重なりも
+    含む。差の正値は基準より多い配分、負値は基準より少ない配分を意味し、
+    誤りの割合そのものではない。
     """
     K = probs.shape[1]
-    M = np.zeros((K, K))
-    for y, p in zip(softs, probs):
-        M += np.outer(y, p)
-    row = M.sum(axis=1, keepdims=True)
-    Mn = M / (row + EPS)
+    M_pred = softs.T @ probs
+    M_ideal = softs.T @ softs
+    row = M_pred.sum(axis=1, keepdims=True)
+    Mn = np.divide(M_pred, row, out=np.zeros_like(M_pred), where=row > 0)
+    ideal_n = np.divide(M_ideal, row, out=np.zeros_like(M_ideal), where=row > 0)
+    excess = Mn - ideal_n
 
     print("\n  [B] 確率質量の配分行列（行=正解, 列=予測, 行方向に正規化）")
     print(f"    {'正解\\予測':<13}" + "".join(f"{n:>10}" for n in CLASS_NAMES)
