@@ -201,6 +201,30 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
     other_ratio = other_tag_votes / total_tag_votes * 100 if total_tag_votes else 0.0
     print(f"  Otherに集約される元タグ合計: {other_tag_votes} 票 ({other_ratio:.2f}%)")
 
+    # ソフトラベルの分布エントロピー（自然対数、単位: nats）を帯ごとに集計。
+    # 5クラスの最大値は ln(5) ≈ 1.609 nats。投票がない発話はエントロピーを定義できないため別計上。
+    entropy_band_labels = ['0.0–<0.4', '0.4–<0.8', '0.8–<1.2', '1.2–ln(5)']
+    entropy_band_counts = [0, 0, 0, 0]
+    valid_entropy_count = 0
+    for vote_vector in soft_label_dic.values():
+        total_votes = float(np.sum(vote_vector))
+        if total_votes <= 0:
+            continue
+        probs = np.asarray(vote_vector, dtype=float) / total_votes
+        entropy = float(-np.sum(probs[probs > 0] * np.log(probs[probs > 0])))
+        band_index = 0 if entropy < 0.4 else 1 if entropy < 0.8 else 2 if entropy < 1.2 else 3
+        entropy_band_counts[band_index] += 1
+        valid_entropy_count += 1
+
+    no_vote_count = total_utterances - valid_entropy_count
+    print("\n[ソフトラベルのエントロピー帯別 発話数]")
+    print("  ※エントロピーはnats。割合の分母は投票がありエントロピーを計算できる発話数")
+    for band_label, count in zip(entropy_band_labels, entropy_band_counts):
+        ratio = count / valid_entropy_count * 100 if valid_entropy_count else 0.0
+        print(f"  {band_label}: {count} 発話 ({ratio:.2f}%)")
+    no_vote_ratio = no_vote_count / total_utterances * 100 if total_utterances else 0.0
+    print(f"  投票なし（計算対象外）: {no_vote_count} 発話 ({no_vote_ratio:.2f}% of all utterances)")
+
     print(f"  ➡️  {hard_label_path}")
     print(f"  ➡️  {soft_label_path}")
     

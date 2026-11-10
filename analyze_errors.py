@@ -78,6 +78,7 @@ def analyze_errors(target_path, output_dir=None):
     all_true_ids = []
     all_pred_ids = []
     all_results = [] 
+    all_flow_records = []
     
     total_samples = 0
     total_correct = 0
@@ -89,6 +90,7 @@ def analyze_errors(target_path, output_dir=None):
         try:
             data = np.load(npy_file, allow_pickle=True).item()
             fold_num = data.get('fold', '?')
+            all_flow_records.extend(data.get('flow_records', []))
             
             true_ids = data['true_ids']
             pred_ids = data['pred_ids']
@@ -284,6 +286,67 @@ def analyze_errors(target_path, output_dir=None):
                     f.write(f"  (Distribution data error: {e})\n")
 
             f.write("-" * 50 + "\n")
+
+    # --- 対話の順序を保った全発話レポート ---
+    flow_report_path = os.path.join(output_dir, 'dialogue_flow_report.txt')
+    if all_flow_records:
+        all_flow_records.sort(key=lambda r: (
+            str(r.get('dialog_id', ''))[:5],
+            str(r.get('dialog_id', '')),
+            int(r.get('turn_index', 0))
+        ))
+
+        def format_distribution(values):
+            if values is None:
+                return 'N/A'
+            probs = np.asarray(values, dtype=float)
+            total = probs.sum()
+            if probs.size == 0 or not np.isfinite(probs).all() or total <= 0:
+                return 'N/A'
+            probs = probs / total
+            return ', '.join(
+                f"{EMOTION_NAMES.get(i, str(i))}={prob:.4f}"
+                for i, prob in enumerate(probs)
+            )
+
+        with open(flow_report_path, 'w', encoding='utf-8') as f:
+            f.write("IEMOCAP Dialogue Flow Report\n")
+            f.write("Entropy unit: nats\n")
+            f.write(f"Utterances: {len(all_flow_records)}\n")
+            f.write("=" * 100 + "\n")
+
+            previous_session = None
+            previous_dialog = None
+            for record in all_flow_records:
+                dialog_id = str(record.get('dialog_id', 'Unknown'))
+                session_id = dialog_id[:5] if dialog_id.startswith('Ses') else 'Unknown'
+                if session_id != previous_session:
+                    f.write(f"\n######## {session_id} ########\n")
+                    previous_session = session_id
+                    previous_dialog = None
+                if dialog_id != previous_dialog:
+                    f.write(f"\n--- Dialogue: {dialog_id} ---\n")
+                    previous_dialog = dialog_id
+
+                true_soft = record.get('true_soft')
+                pred_prob = record.get('pred_prob')
+                true_entropy = safe_calculate_entropy(true_soft)
+                pred_entropy = safe_calculate_entropy(pred_prob)
+                true_entropy_text = f"{true_entropy:.4f}" if true_entropy is not None else 'N/A'
+                pred_entropy_text = f"{pred_entropy:.4f}" if pred_entropy is not None else 'N/A'
+                turn = int(record.get('turn_index', 0)) + 1
+
+                f.write(f"\nTurn {turn:03d} | Speaker: {record.get('speaker', 'N/A')} | "
+                        f"Utterance ID: {record.get('utterance_id', 'N/A')}\n")
+                f.write(f"Text: {record.get('text', '')}\n")
+                f.write(f"Ground-truth entropy: {true_entropy_text} | "
+                        f"Ground-truth distribution: {format_distribution(true_soft)}\n")
+                f.write(f"Prediction entropy: {pred_entropy_text} | "
+                        f"Prediction distribution: {format_distribution(pred_prob)}\n")
+                f.write("-" * 100 + "\n")
+        print(f"Wrote dialogue flow report to {flow_report_path}")
+    else:
+        print("Dialogue flow metadata is unavailable. Re-run run.py to save it in test result files.")
 
     # --- 2. 混同行列の作成 ---
     print("Generating Confusion Matrix...")

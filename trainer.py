@@ -11,6 +11,7 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
     raw_probs = []
     raw_soft_labels = []
     text_data = []
+    flow_records = []
 
     if train:
         model.train()
@@ -18,6 +19,8 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         model.eval()
 
     for data in dataloader:
+        if data[0] is None:
+            continue
         if train:
             optimizer.zero_grad()
         
@@ -32,6 +35,10 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         batch_utterances = data[8]
         # ★追加: 真のハードラベル
         labels_hard_gt = data[9].cuda() if cuda else data[9]
+        batch_dialog_ids = data[10]
+        batch_utterance_ids = data[11]
+        batch_speaker_names = data[12]
+        batch_turn_indices = data[13]
         
         outputs = model(features_text, features_audio, adj, s_mask, s_mask_onehot, lengths)
         
@@ -74,6 +81,21 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         
         for i, seq in enumerate(l_hard.cpu().tolist()):
             for j, l in enumerate(seq):
+                # Preserve the ordered utterance stream independently of the MA/NMA metric filter.
+                if not train and j < len(batch_utterance_ids[i]):
+                    true_soft = ls_cpu[i][j]
+                    if np.sum(true_soft) < 0:
+                        true_soft = None
+                    flow_records.append({
+                        'dialog_id': batch_dialog_ids[i],
+                        'utterance_id': batch_utterance_ids[i][j],
+                        'turn_index': batch_turn_indices[i][j],
+                        'speaker': batch_speaker_names[i][j],
+                        'text': batch_utterances[i][j],
+                        'hard_label': int(labels_hard_gt[i][j].item()),
+                        'true_soft': true_soft,
+                        'pred_prob': prob_cpu[i][j]
+                    })
                 if l != -1: # パディング以外
                     
                     # ★追加: フィルタリングロジック
@@ -128,4 +150,4 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         f1 = 0.0
         acc = 0.0
 
-    return avg_loss, avg_nll, acc, labels, preds, f1, raw_probs, raw_soft_labels, text_data
+    return avg_loss, avg_nll, acc, labels, preds, f1, raw_probs, raw_soft_labels, text_data, flow_records

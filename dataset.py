@@ -70,9 +70,12 @@ class MultimodalDAGDataset(Dataset):
         labels_soft_list = []
         labels_hard_list = []
         speakers_list = []
+        speaker_names_list = []
         utterances_list = []
+        utterance_ids_list = []
+        turn_indices_list = []
 
-        for utt_id in utt_ids:
+        for turn_index, utt_id in enumerate(utt_ids):
             hard_label = self.hard_labels.get(utt_id, -1)
             
             # Default時(nma=False)はXXX(5)をここで除外
@@ -107,8 +110,11 @@ class MultimodalDAGDataset(Dataset):
             
             speaker_char = utt_id.split('_')[-1][0]
             speakers_list.append(self.speaker_vocab['stoi'].get(speaker_char, 0))
+            speaker_names_list.append(speaker_char)
 
             utterances_list.append(self.text_dict.get(utt_id, ""))
+            utterance_ids_list.append(utt_id)
+            turn_indices_list.append(turn_index)
 
         if not speakers_list:
              return None 
@@ -119,7 +125,11 @@ class MultimodalDAGDataset(Dataset):
                torch.LongTensor(np.array(labels_hard_list)), \
                speakers_list, \
                len(speakers_list), \
-               utterances_list
+               utterances_list, \
+               ses_id, \
+               utterance_ids_list, \
+               speaker_names_list, \
+               turn_indices_list
 
     def __len__(self):
         return self.len
@@ -159,7 +169,7 @@ class MultimodalDAGDataset(Dataset):
     def collate_fn(self, batch):
         batch = [d for d in batch if d is not None]
         if not batch:
-            return None, None, None, None, None, None, None, None, None, None
+            return (None,) * 14
 
         max_dialog_len = max([d[5] for d in batch])
         
@@ -175,5 +185,11 @@ class MultimodalDAGDataset(Dataset):
         lengths = torch.LongTensor([d[5] for d in batch])
         speakers = pad_sequence([torch.LongTensor(d[4]) for d in batch], batch_first = True, padding_value = -1)
         utterances = [d[6] for d in batch]
+        dialog_ids = [d[7] for d in batch]
+        utterance_ids = [d[8] for d in batch]
+        speaker_names = [d[9] for d in batch]
+        turn_indices = [d[10] for d in batch]
 
-        return features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot, lengths, speakers, utterances, labels_hard
+        return (features_text, features_audio, labels_soft, adj, s_mask, s_mask_onehot,
+                lengths, speakers, utterances, labels_hard, dialog_ids,
+                utterance_ids, speaker_names, turn_indices)

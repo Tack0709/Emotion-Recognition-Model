@@ -226,16 +226,16 @@ if __name__ == '__main__':
 
         # ★学習・検証フェーズの設定を適用
         args.nma = train_nma_flag 
-        t_loss, t_nll, t_acc, _, _, t_f1, _, _, _ = train_or_eval_model(
+        t_loss, t_nll, t_acc, _, _, t_f1, _, _, _, _ = train_or_eval_model(
             model, criterion, train_loader, e, cuda, args, optimizer, scheduler, True
         )
-        v_loss, v_nll, v_acc, _, _, v_f1, _, _, _ = train_or_eval_model(
+        v_loss, v_nll, v_acc, _, _, v_f1, _, _, _, _ = train_or_eval_model(
             model, criterion, valid_loader, e, cuda, args
         )
         
         # ★テストフェーズの設定を適用
         args.nma = test_nma_flag
-        test_loss, test_nll, test_acc, test_labels, test_preds, test_f1, test_probs, test_softs, test_texts = train_or_eval_model(
+        test_loss, test_nll, test_acc, test_labels, test_preds, test_f1, test_probs, test_softs, test_texts, test_flow_records = train_or_eval_model(
             model, criterion, test_loader, e, cuda, args
         )
 
@@ -270,7 +270,8 @@ if __name__ == '__main__':
                 'pred_ids': test_preds,
                 'pred_probs': test_probs,
                 'true_softs': test_softs,
-                'texts': test_texts
+                'texts': test_texts,
+                'flow_records': test_flow_records
             }
 
     logger.info('finish training!')
