@@ -56,7 +56,11 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
     # 0: neu, 1: hap, 2: sad, 3: ang, 4: oth, 5: xxx
 
     # --- 3. ファイル解析とデータ抽出 ---
-    soft_label_dic = {} 
+    soft_label_dic = {}
+    # 元の評価タグごとの投票数と、そのタグが1回以上付いた発話数を集計する。
+    # 同じ発話に複数評価者が同じタグを付けた場合、投票数には複数回、発話数には1回計上。
+    raw_tag_vote_counts = defaultdict(int)
+    raw_tag_utterances = defaultdict(set)
     
     current_utt_id = None
     current_soft_labels = []
@@ -103,6 +107,8 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
                             for tag in emotion_tags:
                                 tag = tag.strip()
                                 if tag:
+                                    raw_tag_vote_counts[tag] += 1
+                                    raw_tag_utterances[tag].add(current_utt_id)
                                     # Otherへの集約と追加 (1タグにつき1ベクトル追加)
                                     vec = mapping.get(tag, OTHER_VECTOR)
                                     current_soft_labels.append(vec)
@@ -168,6 +174,33 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
 
     print(f"処理完了。総発話数: {len(final_hard_label_dic)}")
     print(f"  うち XXX (評価不一致) 数: {xxx_count} ({(xxx_count/len(final_hard_label_dic))*100:.2f}%)")
+
+    # --- 5. クラス別の発話数・割合と元タグ別の内訳を表示 ---
+    class_names = ['Neutral', 'Happiness (+ Excited)', 'Sadness', 'Anger', 'Other', 'XXX']
+    class_counts = np.bincount(list(final_hard_label_dic.values()), minlength=6)
+    total_utterances = len(final_hard_label_dic)
+    print("\n[ハードラベル別 発話数]")
+    for class_id, class_name in enumerate(class_names):
+        count = int(class_counts[class_id])
+        ratio = count / total_utterances * 100 if total_utterances else 0.0
+        print(f"  {class_name}: {count} 発話 ({ratio:.2f}%)")
+
+    total_tag_votes = sum(raw_tag_vote_counts.values())
+    other_tag_names = [tag for tag in raw_tag_vote_counts if tag not in mapping]
+    other_tag_votes = sum(raw_tag_vote_counts[tag] for tag in other_tag_names)
+    print("\n[元の評価タグ別 内訳]")
+    print("  ※投票数は評価タグの出現回数、発話数はそのタグが付いたユニークな発話数")
+    for tag in sorted(raw_tag_vote_counts):
+        count = raw_tag_vote_counts[tag]
+        vote_ratio = count / total_tag_votes * 100 if total_tag_votes else 0.0
+        utterance_count = len(raw_tag_utterances[tag])
+        utterance_ratio = utterance_count / total_utterances * 100 if total_utterances else 0.0
+        group = 'Other' if tag in other_tag_names else ('Excited (Happinessへ統合)' if tag == 'Excited' else tag)
+        print(f"  {tag} [{group}]: {count} 票 ({vote_ratio:.2f}%), "
+              f"{utterance_count} 発話 ({utterance_ratio:.2f}%)")
+    other_ratio = other_tag_votes / total_tag_votes * 100 if total_tag_votes else 0.0
+    print(f"  Otherに集約される元タグ合計: {other_tag_votes} 票 ({other_ratio:.2f}%)")
+
     print(f"  ➡️  {hard_label_path}")
     print(f"  ➡️  {soft_label_path}")
     
