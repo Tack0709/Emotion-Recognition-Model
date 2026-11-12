@@ -4,6 +4,7 @@ import os
 import glob
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from distribution_metrics import calculate_distribution_metrics
 
 # クラス定義
 EMOTION_NAMES = {0: 'Neutral', 1: 'Happy', 2: 'Sad', 3: 'Anger', 4: 'Other', 5: 'XXX'}
@@ -123,7 +124,8 @@ def analyze_errors(target_path, output_dir=None):
                 p_prob = pred_probs[i] if (pred_probs is not None and i < len(pred_probs)) else None
                 
                 # KL / Entropy 計算 (安全な関数を使用)
-                kl_div = safe_calculate_kl_divergence(t_soft, p_prob)
+                distribution_metrics = calculate_distribution_metrics(t_soft, p_prob)
+                kl_div = distribution_metrics['kl']
                 t_entropy = safe_calculate_entropy(t_soft)
                 p_entropy = safe_calculate_entropy(p_prob)
 
@@ -159,6 +161,9 @@ def analyze_errors(target_path, output_dir=None):
                     'true_soft': t_soft,
                     'pred_prob': p_prob,
                     'kl_div': kl_div,
+                    'js_div': distribution_metrics['js'],
+                    'bc': distribution_metrics['bc'],
+                    'r2': distribution_metrics['r2'],
                     't_entropy': t_entropy,
                     'p_entropy': p_entropy
                 })
@@ -177,10 +182,17 @@ def analyze_errors(target_path, output_dir=None):
     # --- 1. 平均値の計算 (ここを追加) ---
     # Noneを除外してリスト化
     valid_kls = [r['kl_div'] for r in all_results if r['kl_div'] is not None]
+    valid_jss = [r['js_div'] for r in all_results if r['js_div'] is not None]
+    valid_bcs = [r['bc'] for r in all_results if r['bc'] is not None]
+    valid_r2s = [r['r2'] for r in all_results if r['r2'] is not None]
     valid_t_ents = [r['t_entropy'] for r in all_results if r['t_entropy'] is not None]
     valid_p_ents = [r['p_entropy'] for r in all_results if r['p_entropy'] is not None]
 
     avg_kl = np.mean(valid_kls) if valid_kls else 0.0
+    avg_js = np.mean(valid_jss) if valid_jss else 0.0
+    avg_bc = np.mean(valid_bcs) if valid_bcs else 0.0
+    avg_r2 = np.mean(valid_r2s) if valid_r2s else None
+    avg_r2_text = f"{avg_r2:.4f}" if avg_r2 is not None else 'N/A (undefined for constant target distributions)'
     avg_t_ent = np.mean(valid_t_ents) if valid_t_ents else 0.0
     avg_p_ent = np.mean(valid_p_ents) if valid_p_ents else 0.0
 
@@ -196,6 +208,9 @@ def analyze_errors(target_path, output_dir=None):
     print(f"Top-2 Acc      : {top2_acc:.2f}%")
     # コンソール出力に追加
     print(f"Avg KL Div     : {avg_kl:.4f}")
+    print(f"Avg JS Div     : {avg_js:.4f}")
+    print(f"Avg BC         : {avg_bc:.4f}")
+    print(f"Avg R2         : {avg_r2_text}")
     print(f"Avg T-Entropy  : {avg_t_ent:.4f}")
     print(f"Avg P-Entropy  : {avg_p_ent:.4f}")
     print("-" * 30)
@@ -208,6 +223,9 @@ def analyze_errors(target_path, output_dir=None):
         f.write(f"Top-2 Accuracy   : {top2_acc:.2f}% ({top2_correct}/{total_samples})\n")
         # ファイル出力に追加
         f.write(f"Avg KL Divergence: {avg_kl:.4f}\n")
+        f.write(f"Avg JS Divergence: {avg_js:.4f}\n")
+        f.write(f"Avg Bhattacharyya Coefficient: {avg_bc:.4f}\n")
+        f.write(f"Avg R2 (per-utterance): {avg_r2_text}\n")
         f.write(f"Avg T-Entropy    : {avg_t_ent:.4f} (Ambiguity of Ground Truth)\n")
         f.write(f"Avg P-Entropy    : {avg_p_ent:.4f} (Uncertainty of Model)\n")
         f.write("="*80 + "\n")
@@ -251,6 +269,9 @@ def analyze_errors(target_path, output_dir=None):
             # KL / Entropy 表示 (計算できた場合のみ)
             metrics_str = []
             if res['kl_div'] is not None: metrics_str.append(f"KL Div: {res['kl_div']:.4f}")
+            if res['js_div'] is not None: metrics_str.append(f"JS Div: {res['js_div']:.4f}")
+            if res['bc'] is not None: metrics_str.append(f"BC: {res['bc']:.4f}")
+            if res['r2'] is not None: metrics_str.append(f"R2: {res['r2']:.4f}")
             if res['t_entropy'] is not None: metrics_str.append(f"T-Entropy: {res['t_entropy']:.4f}")
             if res['p_entropy'] is not None: metrics_str.append(f"P-Entropy: {res['p_entropy']:.4f}")
             
@@ -332,6 +353,7 @@ def analyze_errors(target_path, output_dir=None):
                 pred_prob = record.get('pred_prob')
                 true_entropy = safe_calculate_entropy(true_soft)
                 pred_entropy = safe_calculate_entropy(pred_prob)
+                distribution_metrics = calculate_distribution_metrics(true_soft, pred_prob)
                 true_entropy_text = f"{true_entropy:.4f}" if true_entropy is not None else 'N/A'
                 pred_entropy_text = f"{pred_entropy:.4f}" if pred_entropy is not None else 'N/A'
                 turn = int(record.get('turn_index', 0)) + 1
@@ -343,6 +365,14 @@ def analyze_errors(target_path, output_dir=None):
                         f"Ground-truth distribution: {format_distribution(true_soft)}\n")
                 f.write(f"Prediction entropy: {pred_entropy_text} | "
                         f"Prediction distribution: {format_distribution(pred_prob)}\n")
+                f.write("Distribution metrics: " + ", ".join(
+                    f"{name}={value:.4f}" for name, value in (
+                        ('KL', distribution_metrics['kl']),
+                        ('JS', distribution_metrics['js']),
+                        ('BC', distribution_metrics['bc']),
+                        ('R2', distribution_metrics['r2'])
+                    ) if value is not None
+                ) + "\n")
                 f.write("-" * 100 + "\n")
         print(f"Wrote dialogue flow report to {flow_report_path}")
     else:

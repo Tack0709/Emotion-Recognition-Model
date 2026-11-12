@@ -4,7 +4,7 @@ import argparse
 import re
 import matplotlib.pyplot as plt
 
-def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma, train_nma_test_ma): # ★追加: 引数
+def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma, train_nma_test_ma, full=False): # ★追加: 引数
     # --- 1. アーキテクチャ名の決定 ---
     if edl_r2:
         arch_name = "edl_r2"
@@ -19,7 +19,9 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
     
     # ★修正: ディレクトリ選択
-    if train_ma_test_nma:
+    if full:
+        mode_dirname = 'full'
+    elif train_ma_test_nma:
         mode_dirname = 'ma2nma'
     elif train_nma_test_ma:      # ★追加: nma2ma
         mode_dirname = 'nma2ma'
@@ -126,7 +128,7 @@ def plot_metrics(rows, log_path, output_dir=None):
     keys = list(first_data.keys()) # 例: ['NLL', 'KL', 'F1', 'Acc']
     
     # 表示順序を整える（見やすさのため）
-    priority_order = ['NLL', 'KL', 'F1', 'Acc']
+    priority_order = ['NLL', 'KL', 'JS', 'BC', 'R2', 'F1', 'Acc']
     metrics = sorted(keys, key=lambda k: priority_order.index(k) if k in priority_order else 999)
 
     num_metrics = len(metrics)
@@ -181,6 +183,7 @@ def main():
 
     parser.add_argument('--train_ma_test_nma', action='store_true')
     parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
+    parser.add_argument('--full', action='store_true')
 
     args = parser.parse_args()
 
@@ -188,7 +191,7 @@ def main():
     log_files = find_log_files(
         args.log_dir, args.eval_metric, args.seed, args.nma, args.modality,
         args.simple_nn, args.standard_gnn, args.edl_r2,
-        args.train_ma_test_nma, args.train_nma_test_ma # ★追加
+        args.train_ma_test_nma, args.train_nma_test_ma, args.full # ★追加
     )
     
     if not log_files:

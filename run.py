@@ -49,12 +49,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
     parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
-    parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss'], 
-                        help='Metric to select best model (f1: Maximize F1, loss: Minimize NLL)')
+    parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss', 'kl'],
+                        help='Metric to select best model (f1: maximize, loss: minimize NLL, kl: minimize KL)')
     parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5])
     parser.add_argument('--log_file_name', type=str, default=None)
     parser.add_argument('--dev_ratio', type=float, default=0.2)
     parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
+    parser.add_argument('--full', action='store_true', help='Include all utterances and preserve session/dialogue order in every split')
     
     # ★既存: 学習はMA、テストはNMAで行うためのフラグ
     parser.add_argument('--train_ma_test_nma', action='store_true', help='Train on MA data (exclude XXX), but Test on NMA data (include XXX)')
@@ -99,6 +100,8 @@ if __name__ == '__main__':
     parser.add_argument('--edl_r2', action='store_true', help='Use EDL(R2) Loss and Dirichlet distribution')
  
     args = parser.parse_args()
+    if args.full and (args.nma or args.train_ma_test_nma or args.train_nma_test_ma):
+        parser.error('--full cannot be combined with --nma, --train_ma_test_nma, or --train_nma_test_ma')
     seed_everything(args.seed)
     args.cuda = torch.cuda.is_available() and not args.no_cuda
 
@@ -108,7 +111,12 @@ if __name__ == '__main__':
         raise ValueError("少なくとも1つのモダリティを有効にしてください。")
     
     # --- モード設定の決定 ---
-    if args.train_ma_test_nma:
+    if args.full:
+        train_nma_flag = True
+        test_nma_flag = True
+        mode_dir_name = 'full'
+        logger_suffix = ''
+    elif args.train_ma_test_nma:
         # 学習はMA(False)、テストはNMA(True)
         train_nma_flag = False
         test_nma_flag = True
@@ -181,7 +189,8 @@ if __name__ == '__main__':
         dev_ratio=args.dev_ratio,
         nma=False, # default引数は無視されます
         train_nma=train_nma_flag, # ★学習用設定
-        test_nma=test_nma_flag    # ★テスト用設定
+        test_nma=test_nma_flag,   # ★テスト用設定
+        preserve_order=args.full
     )
     
     n_classes = len(label_vocab['itos'])
@@ -209,13 +218,17 @@ if __name__ == '__main__':
         num_training_steps=num_training_steps
     )
 
-    if args.eval_metric == 'loss':
+    if args.eval_metric in ('loss', 'kl'):
         best_val_score = float('inf')
     else:
         best_val_score = -float('inf')
         
     best_test_f1 = 0.0
     best_test_nll = 0.0 
+    best_test_kl = 0.0
+    best_test_js = 0.0
+    best_test_bc = 0.0
+    best_test_r2 = 0.0
     best_test_acc = 0.0
     best_epoch = -1
 
@@ -226,24 +239,24 @@ if __name__ == '__main__':
 
         # ★学習・検証フェーズの設定を適用
         args.nma = train_nma_flag 
-        t_loss, t_nll, t_acc, _, _, t_f1, _, _, _, _ = train_or_eval_model(
+        t_loss, t_nll, t_kl, t_js, t_bc, t_r2, t_acc, _, _, t_f1, _, _, _, _ = train_or_eval_model(
             model, criterion, train_loader, e, cuda, args, optimizer, scheduler, True
         )
-        v_loss, v_nll, v_acc, _, _, v_f1, _, _, _, _ = train_or_eval_model(
+        v_loss, v_nll, v_kl, v_js, v_bc, v_r2, v_acc, _, _, v_f1, _, _, _, _ = train_or_eval_model(
             model, criterion, valid_loader, e, cuda, args
         )
         
         # ★テストフェーズの設定を適用
         args.nma = test_nma_flag
-        test_loss, test_nll, test_acc, test_labels, test_preds, test_f1, test_probs, test_softs, test_texts, test_flow_records = train_or_eval_model(
+        test_loss, test_nll, test_kl, test_js, test_bc, test_r2, test_acc, test_labels, test_preds, test_f1, test_probs, test_softs, test_texts, test_flow_records = train_or_eval_model(
             model, criterion, test_loader, e, cuda, args
         )
 
         logger.info(
             f"Ep {e+1}: "
-            f"Train [NLL {t_nll:.4f} F1 {t_f1:.2f} Acc {t_acc:.2f}] | "
-            f"Val [NLL {v_nll:.4f} F1 {v_f1:.2f} Acc {v_acc:.2f}] | "
-            f"Test [NLL {test_nll:.4f} F1 {test_f1:.2f} Acc {test_acc:.2f}] | "
+            f"Train [NLL {t_nll:.4f} KL {t_kl:.4f} JS {t_js:.4f} BC {t_bc:.4f} R2 {t_r2:.4f} F1 {t_f1:.2f} Acc {t_acc:.2f}] | "
+            f"Val [NLL {v_nll:.4f} KL {v_kl:.4f} JS {v_js:.4f} BC {v_bc:.4f} R2 {v_r2:.4f} F1 {v_f1:.2f} Acc {v_acc:.2f}] | "
+            f"Test [NLL {test_nll:.4f} KL {test_kl:.4f} JS {test_js:.4f} BC {test_bc:.4f} R2 {test_r2:.4f} F1 {test_f1:.2f} Acc {test_acc:.2f}] | "
             f"Time {time.time() - start_time:.1f}s"
         )
 
@@ -251,6 +264,10 @@ if __name__ == '__main__':
         if args.eval_metric == 'loss':
             if v_nll < best_val_score:
                 best_val_score = v_nll
+                is_best = True
+        elif args.eval_metric == 'kl':
+            if v_kl < best_val_score:
+                best_val_score = v_kl
                 is_best = True
         else:
             if v_f1 > best_val_score:
@@ -261,6 +278,10 @@ if __name__ == '__main__':
             best_epoch = e + 1
             best_test_f1 = test_f1
             best_test_nll = test_nll
+            best_test_kl = test_kl
+            best_test_js = test_js
+            best_test_bc = test_bc
+            best_test_r2 = test_r2
             best_test_acc = test_acc
             
             analysis_data = {
@@ -271,7 +292,11 @@ if __name__ == '__main__':
                 'pred_probs': test_probs,
                 'true_softs': test_softs,
                 'texts': test_texts,
-                'flow_records': test_flow_records
+                'flow_records': test_flow_records,
+                'test_kl': test_kl,
+                'test_js': test_js,
+                'test_bc': test_bc,
+                'test_r2': test_r2
             }
 
     logger.info('finish training!')
@@ -279,11 +304,17 @@ if __name__ == '__main__':
     
     if args.eval_metric == 'loss':
         logger.info(f"Best Val NLL: {best_val_score:.4f}")
+    elif args.eval_metric == 'kl':
+        logger.info(f"Best Val KL: {best_val_score:.4f}")
     else:
         logger.info(f"Best Val F1: {best_val_score:.2f}")
 
     logger.info(f"Test F1 at Best Val: {best_test_f1:.2f}")
     logger.info(f"Test NLL at Best Val: {best_test_nll:.4f}")
+    logger.info(f"Test KL at Best Val: {best_test_kl:.4f}")
+    logger.info(f"Test JS at Best Val: {best_test_js:.4f}")
+    logger.info(f"Test BC at Best Val: {best_test_bc:.4f}")
+    logger.info(f"Test R2 at Best Val: {best_test_r2:.4f}")
     logger.info(f"Test Acc at Best Val: {best_test_acc:.2f}")
     
     if analysis_data is not None:

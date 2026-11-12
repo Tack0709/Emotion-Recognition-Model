@@ -25,7 +25,7 @@ def load_vocab(data_dir):
 
     return speaker_vocab, label_vocab
 
-def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False, train_nma=None, test_nma=None):
+def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False, train_nma=None, test_nma=None, preserve_order=False):
     print('building vocab.. ')
     speaker_vocab, label_vocab = load_vocab(data_dir)
     
@@ -43,8 +43,8 @@ def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0,
     # split='test' には test_nma を適用
     testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=test_nma)
     
-    train_sampler = get_train_valid_sampler(trainset)
-    valid_sampler = get_train_valid_sampler(devset)
+    train_sampler = None if preserve_order else get_train_valid_sampler(trainset)
+    valid_sampler = None if preserve_order else get_train_valid_sampler(devset)
 
     train_loader = DataLoader(trainset, batch_size=batch_size, sampler=train_sampler, collate_fn=trainset.collate_fn, num_workers=num_workers)
     valid_loader = DataLoader(devset, batch_size=batch_size, sampler=valid_sampler, collate_fn=devset.collate_fn, num_workers=num_workers)

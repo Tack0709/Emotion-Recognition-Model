@@ -75,6 +75,7 @@ EXPERIMENTS=(
     "DAG-ERC_MA学習MAテスト|default|multimodal|"
     "DAG-ERC_MA学習NMAテスト|ma2nma|multimodal|"
     "DAG-ERC_MA+NMA学習|nma|multimodal|"
+    # "DAG-ERC_Full|full|multimodal|"  # MA/NMAで分けず全発話を順序どおり使用
 
     # ---------- 文脈の効果を分離（simple_nn = GNNをバイパス） ----------
     "SimpleNN_MA学習NMAテスト|ma2nma|multimodal|--simple_nn"
@@ -130,6 +131,7 @@ for exp in "${EXPERIMENTS[@]}"; do
         nma)     mode_args+=(--nma) ;;
         ma2nma)  mode_args+=(--train_ma_test_nma) ;;
         nma2ma)  mode_args+=(--train_nma_test_ma) ;;
+        full)    mode_args+=(--full) ;;
         default) ;;
         *) echo "不明なモード: $mode"; exit 1 ;;
     esac
@@ -206,7 +208,7 @@ for exp in "${EXPERIMENTS[@]}"; do
 
     # モード名は run.py の保存先ディレクトリに合わせる
     case "$mode" in
-        default|nma|ma2nma|nma2ma) mode_dir="$mode" ;;
+        default|nma|ma2nma|nma2ma|full) mode_dir="$mode" ;;
         *)
             echo "[警告] 診断できないモードです: ${mode}"
             continue

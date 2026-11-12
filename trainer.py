@@ -1,12 +1,18 @@
 import torch
 import numpy as np
+import torch
 from sklearn.metrics import f1_score, accuracy_score
+from distribution_metrics import calculate_distribution_metrics
 
 def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, optimizer=None, scheduler=None, train=False):
     losses = []
     preds = []
     labels = []
     nlls = []
+    kls = []
+    jss = []
+    bcs = []
+    r2s = []
     
     raw_probs = []
     raw_soft_labels = []
@@ -86,7 +92,7 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
                     true_soft = ls_cpu[i][j]
                     if np.sum(true_soft) < 0:
                         true_soft = None
-                    flow_records.append({
+                    record = {
                         'dialog_id': batch_dialog_ids[i],
                         'utterance_id': batch_utterance_ids[i][j],
                         'turn_index': batch_turn_indices[i][j],
@@ -95,13 +101,15 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
                         'hard_label': int(labels_hard_gt[i][j].item()),
                         'true_soft': true_soft,
                         'pred_prob': prob_cpu[i][j]
-                    })
+                    }
+                    record.update(calculate_distribution_metrics(true_soft, prob_cpu[i][j]))
+                    flow_records.append(record)
                 if l != -1: # パディング以外
                     
                     # ★追加: フィルタリングロジック
                     true_label_id = labels_hard_gt[i][j].item()
                     
-                    if args.nma:
+                    if args.nma and not getattr(args, 'full', False):
                         # NMAモード: XXX(5) のみ評価する -> 5以外ならスキップ
                         if true_label_id != 5:
                             continue
@@ -132,6 +140,18 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
                         single_nll = -torch.sum(single_label * single_log_prob).item()
                     
                     nlls.append(single_nll)
+
+                    distribution_metrics = calculate_distribution_metrics(
+                        single_label.detach().cpu().numpy(), prob_cpu[i][j]
+                    )
+                    if distribution_metrics['kl'] is not None:
+                        kls.append(distribution_metrics['kl'])
+                    if distribution_metrics['js'] is not None:
+                        jss.append(distribution_metrics['js'])
+                    if distribution_metrics['bc'] is not None:
+                        bcs.append(distribution_metrics['bc'])
+                    if distribution_metrics['r2'] is not None:
+                        r2s.append(distribution_metrics['r2'])
                     
                     if not train:
                         raw_probs.append(prob_cpu[i][j])
@@ -141,13 +161,21 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
     if len(preds) > 0:
         avg_loss = np.mean(losses)
         avg_nll = np.mean(nlls)
+        avg_kl = np.mean(kls) if kls else 0.0
+        avg_js = np.mean(jss) if jss else 0.0
+        avg_bc = np.mean(bcs) if bcs else 0.0
+        avg_r2 = np.mean(r2s) if r2s else float('nan')
         f1 = f1_score(labels, preds, average='weighted') * 100
         acc = accuracy_score(labels, preds) * 100
     else:
         # 該当データがない場合（例: NMAモードだがXXXデータが1つもない場合など）
         avg_loss = np.mean(losses) if losses else 0.0
         avg_nll = 0.0
+        avg_kl = 0.0
+        avg_js = 0.0
+        avg_bc = 0.0
+        avg_r2 = float('nan')
         f1 = 0.0
         acc = 0.0
 
-    return avg_loss, avg_nll, acc, labels, preds, f1, raw_probs, raw_soft_labels, text_data, flow_records
+    return avg_loss, avg_nll, avg_kl, avg_js, avg_bc, avg_r2, acc, labels, preds, f1, raw_probs, raw_soft_labels, text_data, flow_records

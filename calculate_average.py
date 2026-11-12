@@ -1,5 +1,6 @@
 import os
 import glob
+import os
 import numpy as np
 import argparse
 import re
@@ -7,7 +8,7 @@ import re
 def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, 
                       seed=None, nma=False, modality='multimodal', 
                       simple_nn=False, standard_gnn=False, edl_r2=False,
-                      train_ma_test_nma=False, train_nma_test_ma=False): # ★追加: 引数
+                      train_ma_test_nma=False, train_nma_test_ma=False, full=False): # ★追加: 引数
     """
     指定されたディレクトリ内のログファイルを読み込み、
     交差検証の平均スコア（F1, NLL, Acc）を計算して表示・保存する。
@@ -27,7 +28,9 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     seed_pattern = f"seed{seed}" if seed is not None else "seed*"
     
     # ★修正: ディレクトリ選択ロジック
-    if train_ma_test_nma:
+    if full:
+        mode_dirname = 'full'
+    elif train_ma_test_nma:
         mode_dirname = 'ma2nma'
     elif train_nma_test_ma:      # ★追加: nma2maモード
         mode_dirname = 'nma2ma'
@@ -81,6 +84,10 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
 
     test_f1s = []
     test_nlls = []
+    test_kls = []
+    test_jss = []
+    test_bcs = []
+    test_r2s = []
     test_accs = []
 
     result_lines = []
@@ -102,6 +109,10 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
             
             f1_match = re.search(r"Test F1 at Best Val: (\d+\.\d+)", content)
             nll_match = re.search(r"Test (NLL|Loss) at Best Val: (\d+\.\d+)", content)
+            kl_match = re.search(r"Test KL at Best Val: (\d+\.\d+)", content)
+            js_match = re.search(r"Test JS at Best Val: (\d+\.\d+)", content)
+            bc_match = re.search(r"Test BC at Best Val: (\d+\.\d+)", content)
+            r2_match = re.search(r"Test R2 at Best Val: (-?\d+(?:\.\d+)?)", content)
             acc_match = re.search(r"Test Acc at Best Val: (\d+\.\d+)", content)
 
             fold_match = re.search(r"fold(\d+)", log_file)
@@ -119,14 +130,22 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
                 
                 test_f1s.append(f1)
                 test_nlls.append(nll)
+                if kl_match: test_kls.append(float(kl_match.group(1)))
+                if js_match: test_jss.append(float(js_match.group(1)))
+                if bc_match: test_bcs.append(float(bc_match.group(1)))
+                if r2_match: test_r2s.append(float(r2_match.group(1)))
                 if acc_match: test_accs.append(acc)
                 
                 prefix = f"Fold {fold_num}"
                 if seed is None:
                     prefix += f" (Seed {seed_num})"
                 
+                kl_str = f", KL = {float(kl_match.group(1)):.4f}" if kl_match else ""
+                js_str = f", JS = {float(js_match.group(1)):.4f}" if js_match else ""
+                bc_str = f", BC = {float(bc_match.group(1)):.4f}" if bc_match else ""
+                r2_str = f", R2 = {float(r2_match.group(1)):.4f}" if r2_match else ""
                 acc_str = f", Acc = {acc:.4f}" if acc_match else ""
-                result_lines.append(f"  {prefix}: F1 = {f1:.4f}, NLL = {nll:.4f}{acc_str}")
+                result_lines.append(f"  {prefix}: F1 = {f1:.4f}, NLL = {nll:.4f}{kl_str}{js_str}{bc_str}{r2_str}{acc_str}")
             else:
                 result_lines.append(f"  Fold {fold_num}: Warning - Score not found in log.")
 
@@ -140,6 +159,18 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
 
         result_lines.append(f"Average Test F1  : {avg_f1:.4f} (+/- {std_f1:.4f})")
         result_lines.append(f"Average Test NLL : {avg_nll:.4f} (+/- {std_nll:.4f})")
+
+        if test_kls:
+            avg_kl = np.mean(test_kls)
+            std_kl = np.std(test_kls)
+            result_lines.append(f"Average Test KL  : {avg_kl:.4f} (+/- {std_kl:.4f})")
+
+        if test_jss:
+            result_lines.append(f"Average Test JS  : {np.mean(test_jss):.4f} (+/- {np.std(test_jss):.4f})")
+        if test_bcs:
+            result_lines.append(f"Average Test BC  : {np.mean(test_bcs):.4f} (+/- {np.std(test_bcs):.4f})")
+        if test_r2s:
+            result_lines.append(f"Average Test R2  : {np.mean(test_r2s):.4f} (+/- {np.std(test_r2s):.4f})")
         
         if test_accs:
             avg_acc = np.mean(test_accs)
@@ -189,6 +220,7 @@ if __name__ == "__main__":
     # ★追加
     parser.add_argument('--train_ma_test_nma', action='store_true')
     parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
+    parser.add_argument('--full', action='store_true')
     
     args = parser.parse_args()
     
@@ -203,5 +235,6 @@ if __name__ == "__main__":
         standard_gnn=args.standard_gnn,
         edl_r2=args.edl_r2,
         train_ma_test_nma=args.train_ma_test_nma,
-        train_nma_test_ma=args.train_nma_test_ma # ★追加
+        train_nma_test_ma=args.train_nma_test_ma, # ★追加
+        full=args.full
     )
