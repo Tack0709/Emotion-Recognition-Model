@@ -17,7 +17,7 @@ IEMOCAP_ROOT="/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release" #
 
 # Fullモード設定
 MODE="full"                     # 固定値。MA/NMAに分けず、XXXを含む全発話を使う
-MODALITY="multimodal"           # multimodal / text / audio
+MODALITIES=("multimodal" "text" "audio") # 実行するモダリティ。不要な項目はコメントアウト
 TEST_SESSIONS=(1 2 3 4 5)        # 5-fold。各Sessionを順番にテスト用として実行
 DEV_RATIO=0.2                    # テスト対象以外の対話のうち、検証用にする割合
 
@@ -123,75 +123,107 @@ for filename in "${REQUIRED_FILES[@]}"; do
     fi
 done
 
-RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/${MODALITY}"
+# 実行するアーキテクチャ。必要な比較だけ残し、不要な行はコメントアウトする。
+# 既定ではベースラインと3種類のアブレーションをすべて実行する。
+EXPERIMENTS=(
+    "DAG-ERC|"
+    "SimpleNN|--simple_nn"
+    "StandardGNN|--standard_gnn"
+    "EDL_R2|--edl_r2"
+)
 
-for fold in "${TEST_SESSIONS[@]}"; do
-    echo "=========================================================="
-    echo "Full experiment: modality=${MODALITY}, test_session=${fold}"
-    echo "seed=${SEED}, epochs=${EPOCHS}, batch_size=${BATCH_SIZE}, eval_metric=${EVAL_METRIC}"
-    echo "=========================================================="
+for modality in "${MODALITIES[@]}"; do
+    for experiment in "${EXPERIMENTS[@]}"; do
+        IFS='|' read -r experiment_name architecture_flag <<< "$experiment"
 
-    CMD=(python run.py
-        --data_dir "$DATA_DIR"
-        --dataset_name "$DATASET_NAME"
-        --full
-        --modality "$MODALITY"
-        --test_session "$fold"
-        --dev_ratio "$DEV_RATIO"
-        --seed "$SEED"
-        --epochs "$EPOCHS"
-        --batch_size "$BATCH_SIZE"
-        --lr "$LEARNING_RATE"
-        --dropout "$DROPOUT"
-        --max_grad_norm "$MAX_GRAD_NORM"
-        --eval_metric "$EVAL_METRIC"
-        --hidden_dim "$HIDDEN_DIM"
-        --mlp_layers "$MLP_LAYERS"
-        --gnn_layers "$GNN_LAYERS"
-        --attn_type "$ATTN_TYPE"
-        --windowp "$WINDOWP"
-        --windowf "$WINDOWF"
-        --text_dim "$TEXT_DIM"
-        --audio_dim "$AUDIO_DIM"
-        --fusion_dim_D "$FUSION_DIM_D"
-        --fusion_dim_O "$FUSION_DIM_O"
-        --single_modal_dim "$SINGLE_MODAL_DIM")
+        # text/audioではベースラインDAG-ERCのみ実行し、アブレーションはmultimodalに限定する。
+        if [[ "$modality" != "multimodal" && -n "$architecture_flag" ]]; then
+            echo "Skipping ${experiment_name} (${modality}): ablations run only for multimodal input."
+            continue
+        fi
 
-    if [[ -n "$NODAL_ATT_TYPE" ]]; then
-        CMD+=(--nodal_att_type "$NODAL_ATT_TYPE")
-    fi
-    if [[ "$NO_CUDA" == true ]]; then
-        CMD+=(--no_cuda)
-    fi
-    if [[ "$NO_REL_ATTN" == true ]]; then
-        CMD+=(--no_rel_attn)
-    fi
-    if [[ "$TENSORBOARD" == true ]]; then
-        CMD+=(--tensorboard)
-    fi
+        ARCH_ARGS=()
+        if [[ -n "$architecture_flag" ]]; then
+            ARCH_ARGS+=("$architecture_flag")
+        fi
 
-    "${CMD[@]}"
+        # run.pyの保存先規則に合わせてモデル別の結果フォルダを選ぶ。
+        case "$architecture_flag" in
+            --edl_r2) RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/edl_r2" ;;
+            --simple_nn) RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/simple_nn" ;;
+            --standard_gnn) RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/standard_gnn" ;;
+            *) RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/${modality}" ;;
+        esac
+
+        echo "=========================================================="
+        echo "Full experiment: ${experiment_name} (${modality})"
+        echo "seed=${SEED}, epochs=${EPOCHS}, batch_size=${BATCH_SIZE}, eval_metric=${EVAL_METRIC}"
+        echo "=========================================================="
+
+        for fold in "${TEST_SESSIONS[@]}"; do
+            echo "--- ${experiment_name} (${modality}): test_session=${fold} ---"
+
+            CMD=(python run.py
+                --data_dir "$DATA_DIR"
+                --dataset_name "$DATASET_NAME"
+                --full
+                --modality "$modality"
+                --test_session "$fold"
+                --dev_ratio "$DEV_RATIO"
+                --seed "$SEED"
+                --epochs "$EPOCHS"
+                --batch_size "$BATCH_SIZE"
+                --lr "$LEARNING_RATE"
+                --dropout "$DROPOUT"
+                --max_grad_norm "$MAX_GRAD_NORM"
+                --eval_metric "$EVAL_METRIC"
+                --hidden_dim "$HIDDEN_DIM"
+                --mlp_layers "$MLP_LAYERS"
+                --gnn_layers "$GNN_LAYERS"
+                --attn_type "$ATTN_TYPE"
+                --windowp "$WINDOWP"
+                --windowf "$WINDOWF"
+                --text_dim "$TEXT_DIM"
+                --audio_dim "$AUDIO_DIM"
+                --fusion_dim_D "$FUSION_DIM_D"
+                --fusion_dim_O "$FUSION_DIM_O"
+                --single_modal_dim "$SINGLE_MODAL_DIM")
+
+            if [[ -n "$NODAL_ATT_TYPE" ]]; then
+                CMD+=(--nodal_att_type "$NODAL_ATT_TYPE")
+            fi
+            if [[ "$NO_CUDA" == true ]]; then
+                CMD+=(--no_cuda)
+            fi
+            if [[ "$NO_REL_ATTN" == true ]]; then
+                CMD+=(--no_rel_attn)
+            fi
+            if [[ "$TENSORBOARD" == true ]]; then
+                CMD+=(--tensorboard)
+            fi
+
+            "${CMD[@]}" "${ARCH_ARGS[@]}"
+        done
+
+        # モダリティ・アーキテクチャごとにfold平均と学習曲線を保存する。
+        python calculate_average.py \
+            --log_dir "$LOG_ROOT" \
+            --eval_metric "$EVAL_METRIC" \
+            --seed "$SEED" \
+            --modality "$modality" \
+            --full "${ARCH_ARGS[@]}"
+
+        python plot_log.py \
+            --log_dir "$LOG_ROOT" \
+            --eval_metric "$EVAL_METRIC" \
+            --seed "$SEED" \
+            --modality "$modality" \
+            --full "${ARCH_ARGS[@]}"
+
+        if [[ "$RUN_ANALYSIS" == true ]]; then
+            python analyze_errors.py "$RESULT_DIR" --output_dir "$RESULT_DIR"
+        fi
+
+        echo "Completed ${experiment_name} (${modality}). Results: $RESULT_DIR"
+    done
 done
-
-# 5 fold分の平均と標準偏差を保存する。
-python calculate_average.py \
-    --log_dir "$LOG_ROOT" \
-    --eval_metric "$EVAL_METRIC" \
-    --seed "$SEED" \
-    --modality "$MODALITY" \
-    --full
-
-# 学習・検証・テスト指標のepoch推移を図にする。
-python plot_log.py \
-    --log_dir "$LOG_ROOT" \
-    --eval_metric "$EVAL_METRIC" \
-    --seed "$SEED" \
-    --modality "$MODALITY" \
-    --full
-
-# 発話別エラー分析と、セッション・対話順のdialogue_flow_report.txtを作る。
-if [[ "$RUN_ANALYSIS" == true ]]; then
-    python analyze_errors.py "$RESULT_DIR" --output_dir "$RESULT_DIR"
-fi
-
-echo "Full experiment completed. Results: $RESULT_DIR"
