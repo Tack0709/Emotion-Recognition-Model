@@ -1,4 +1,5 @@
 import os
+import argparse
 import re
 import glob
 import pickle
@@ -28,6 +29,7 @@ def create_wav2vec_features(
     SAMPLING_RATE = 16000 
     
     output_path = os.path.join(output_dir, 'w2v2-ft-diag.npy')
+    os.makedirs(output_dir, exist_ok=True)
 
     # --- 2. モデルとプロセッサのロード ---
     print(f"モデルをロード中: {model_name}")
@@ -120,8 +122,13 @@ def create_wav2vec_features(
 
 # --- スクリプト実行 ---
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Extract wav2vec2 features for IEMOCAP utterances.')
+    parser.add_argument('--iemo_root', default='IEMOCAP_full_release', help='IEMOCAP_full_release directory')
+    parser.add_argument('--output_dir', default='output_data')
+    parser.add_argument('--model_name', default='facebook/wav2vec2-base-960h')
+    args = parser.parse_args()
     create_wav2vec_features(
-        iemo_root='/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release', 
-        output_dir='output_data',
-        model_name='facebook/wav2vec2-base-960h' # 768次元
+        iemo_root=args.iemo_root,
+        output_dir=args.output_dir,
+        model_name=args.model_name
     )

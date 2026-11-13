@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import sys
 from collections import defaultdict
@@ -233,7 +234,8 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
 
 # --- スクリプト実行 ---
 if __name__ == "__main__":
-    create_label_files(
-        iemo_root=r'/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release', 
-        output_dir='output_data'
-    )
+    parser = argparse.ArgumentParser(description='Create IEMOCAP hard and soft labels.')
+    parser.add_argument('--iemo_root', default='IEMOCAP_full_release', help='IEMOCAP_full_release directory')
+    parser.add_argument('--output_dir', default='output_data')
+    args = parser.parse_args()
+    create_label_files(iemo_root=args.iemo_root, output_dir=args.output_dir)
