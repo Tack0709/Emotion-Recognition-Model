@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# FullモードのIEMOCAP実験を、全foldで実行して集計するスクリプト。
+# FullモードのIEMOCAP実験と選択式の前処理を、全foldで実行・集計するスクリプト。
 # 実行例: bash run_full.sh
-# 前提: DATA_DIRにラベル、順序、テキスト、BERT、wav2vecの各ファイルが作成済みであること。
+# 前処理フラグがfalseの項目は、既存のDATA_DIR内ファイルを再利用する。
 
 set -euo pipefail
 
@@ -13,6 +13,7 @@ set -euo pipefail
 DATA_DIR="output_data"          # 前処理済みデータのディレクトリ
 LOG_ROOT="saved_models"         # 学習ログ・結果の保存先ルート
 DATASET_NAME="IEMOCAP"          # データセット名
+IEMOCAP_ROOT="/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release" # 元データのルート。環境に合わせて変更
 
 # Fullモード設定
 MODE="full"                     # 固定値。MA/NMAに分けず、XXXを含む全発話を使う
@@ -52,14 +53,75 @@ NO_REL_ATTN=false                # trueならrelational attentionを無効化
 TENSORBOARD=false                # trueならTensorBoard出力を有効化
 RUN_ANALYSIS=true                # trueならエラー分析・対話別レポートも作成
 
+# 前処理の選択。既存ファイルを再利用する項目はfalse、新しく作る／作り直す項目はtrue。
+RUN_LABEL_PREPROCESSING=True    # EmoEvaluationからhard/soft labelを作成し、件数・割合をsummaryに保存
+RUN_METADATA_PREPROCESSING=True # 発話テキスト・対話順・話者vocabを作成
+RUN_BERT_FEATURE_EXTRACTION=True # text_dict.pklからBERT特徴量を抽出（モデル取得にネット接続が必要）
+RUN_WAV2VEC_FEATURE_EXTRACTION=True # 発話wavからwav2vec特徴量を抽出（非常に時間がかかる場合あり）
+BERT_MODEL="bert-base-uncased"  # create_bert_features.pyで使用するモデル
+WAV2VEC_MODEL="facebook/wav2vec2-base-960h" # 音声特徴抽出モデル
+
 # =============================================================================
 # 実行
 # =============================================================================
 
-if [[ ! -d "$DATA_DIR" ]]; then
-    echo "データディレクトリが見つかりません: $DATA_DIR" >&2
-    exit 1
+mkdir -p "$DATA_DIR"
+
+if [[ "$RUN_LABEL_PREPROCESSING" == true || "$RUN_METADATA_PREPROCESSING" == true || "$RUN_WAV2VEC_FEATURE_EXTRACTION" == true ]]; then
+    if [[ ! -d "$IEMOCAP_ROOT" ]]; then
+        echo "IEMOCAP元データのディレクトリが見つかりません: $IEMOCAP_ROOT" >&2
+        exit 1
+    fi
 fi
+
+# 選択された前処理だけを、特徴量作成に必要な順で実行する。
+if [[ "$RUN_LABEL_PREPROCESSING" == true ]]; then
+    echo "[Preprocessing] hard/soft labels"
+    python create_label.py \
+        --iemo_root "$IEMOCAP_ROOT" \
+        --output_dir "$DATA_DIR" \
+        | tee "$DATA_DIR/label_distribution_summary.txt"
+fi
+
+if [[ "$RUN_METADATA_PREPROCESSING" == true ]]; then
+    echo "[Preprocessing] text, dialogue order, speaker vocabulary"
+    python build_metadata.py \
+        --iemo_root "$IEMOCAP_ROOT" \
+        --output_dir "$DATA_DIR"
+fi
+
+if [[ "$RUN_BERT_FEATURE_EXTRACTION" == true ]]; then
+    echo "[Preprocessing] BERT text features"
+    python create_bert_features.py \
+        --output_dir "$DATA_DIR" \
+        --model_name "$BERT_MODEL"
+fi
+
+if [[ "$RUN_WAV2VEC_FEATURE_EXTRACTION" == true ]]; then
+    echo "[Preprocessing] wav2vec audio features"
+    python create_wav2vec_features.py \
+        --iemo_root "$IEMOCAP_ROOT" \
+        --output_dir "$DATA_DIR" \
+        --model_name "$WAV2VEC_MODEL"
+fi
+
+# 学習前に必要ファイルを確認し、未生成なら不足項目を表示して終了する。
+REQUIRED_FILES=(
+    "IEMOCAP-hardlabel.npy"
+    "IEMOCAP-softlabel-sum.npy"
+    "order.pkl"
+    "text_dict.pkl"
+    "speaker_vocab.pkl"
+    "bert-base-diag.npy"
+    "w2v2-ft-diag.npy"
+)
+for filename in "${REQUIRED_FILES[@]}"; do
+    if [[ ! -f "$DATA_DIR/$filename" ]]; then
+        echo "必要な前処理ファイルがありません: $DATA_DIR/$filename" >&2
+        echo "run_full.sh冒頭のRUN_*_PREPROCESSING設定を確認してください。" >&2
+        exit 1
+    fi
+done
 
 RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/${MODALITY}"
 
