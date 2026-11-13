@@ -1,4 +1,5 @@
 import os
+import argparse
 import pickle
 import numpy as np
 import torch
@@ -20,6 +21,8 @@ def create_bert_features(
     # --- 1. デバイス設定 ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用デバイス: {device}")
+
+    os.makedirs(output_dir, exist_ok=True)
 
     # --- 2. 入力ファイル読み込み ---
     # text_dict.pkl を読み込む
@@ -94,9 +97,8 @@ def create_bert_features(
 
 # --- スクリプト実行 ---
 if __name__ == "__main__":
-    # output_data ディレクトリにある text_dict.pkl を読み込み、
-    # output_data ディレクトリに bert-base-diag.npy を保存
-    create_bert_features(
-        output_dir='output_data',
-        model_name='bert-base-uncased' # 'bert-base-uncased' (768次元) を使用
-    )
+    parser = argparse.ArgumentParser(description='Extract BERT features for IEMOCAP utterances.')
+    parser.add_argument('--output_dir', default='output_data')
+    parser.add_argument('--model_name', default='bert-base-uncased')
+    args = parser.parse_args()
+    create_bert_features(output_dir=args.output_dir, model_name=args.model_name)
