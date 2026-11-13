@@ -72,34 +72,34 @@ COMMON="--seed ${SEED} \
 # =============================================================================
 EXPERIMENTS=(
     # ---------- 必須の3条件（卒論の主要な数値の再現） ----------
-    "DAG-ERC_MA学習MAテスト|default|multimodal|"
-    "DAG-ERC_MA学習NMAテスト|ma2nma|multimodal|"
-    "DAG-ERC_MA+NMA学習|nma|multimodal|"
+    # "DAG-ERC_MA学習MAテスト|default|multimodal|"
+    # "DAG-ERC_MA学習NMAテスト|ma2nma|multimodal|"
+    # "DAG-ERC_MA+NMA学習|nma|multimodal|"
 
     # ---------- 文脈の効果を分離（simple_nn = GNNをバイパス） ----------
-    "SimpleNN_MA学習NMAテスト|ma2nma|multimodal|--simple_nn"
-    "SimpleNN_MA+NMA学習|nma|multimodal|--simple_nn"
-    "SimpleNN_MA学習MAテスト|default|multimodal|--simple_nn"
+    # "SimpleNN_MA学習NMAテスト|ma2nma|multimodal|--simple_nn"
+    # "SimpleNN_MA+NMA学習|nma|multimodal|--simple_nn"
+    # "SimpleNN_MA学習MAテスト|default|multimodal|--simple_nn"
 
     # ---------- モダリティ別（卒論 表4.3 / 表4.4） ----------
-    # "DAG-ERC_text|default|text|"
-    # "DAG-ERC_audio|default|audio|"
-    # "DAG-ERC_text_NMA|ma2nma|text|"
-    # "DAG-ERC_audio_NMA|ma2nma|audio|"
+    "DAG-ERC_text|default|text|"
+    "DAG-ERC_audio|default|audio|"
+    "DAG-ERC_text_NMA|ma2nma|text|"
+    "DAG-ERC_audio_NMA|ma2nma|audio|"
 
     # ---------- 文脈モデル（卒論 表4.5 / 表4.6） ----------
     # 注: main の standard_gnn は adj=tril（未来を見ない）。
     #     卒論4.3.2節の記述（未来を見る）と食い違う。要確認。
-    # "StandardGNN|default|multimodal|--standard_gnn"
-    # "StandardGNN_NMA|ma2nma|multimodal|--standard_gnn"
+    "StandardGNN|default|multimodal|--standard_gnn"
+    "StandardGNN_NMA|ma2nma|multimodal|--standard_gnn"
 
     # ---------- 損失関数（卒論 表4.7 / 表4.8） ----------
     # 注: --edl_r2 は multimodal かつ DAG-ERC のときのみ使用可
-    # "EDL_R2|default|multimodal|--edl_r2"
-    # "EDL_R2_NMA|ma2nma|multimodal|--edl_r2"
+    "EDL_R2|default|multimodal|--edl_r2"
+    "EDL_R2_NMA|ma2nma|multimodal|--edl_r2"
 
     # ---------- MA+NMA学習 → MAテスト ----------
-    # "DAG-ERC_NMA学習MAテスト|nma2ma|multimodal|"
+    "DAG-ERC_NMA学習MAテスト|nma2ma|multimodal|"
 )
 
 # =============================================================================

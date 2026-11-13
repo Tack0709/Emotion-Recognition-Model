@@ -249,10 +249,10 @@ def diag_B_mass_matrix(probs, softs):
     """
     仮説B: どのクラスからどのクラスへ確率質量が流れているか。
 
-    行 = 正解クラス、列 = 予測クラス、値 = Σ_utt y_i * p_j を行方向に正規化。
+    M_pred[i,j] = Σ_utt y_i * p_j を計算し、正解クラスごとに行方向へ正規化する。
     これは誤分類件数ではなく、正解分布の確率質量が予測分布へどう配分されたか
     を表す期待値。argmax を使わないため tie-breaking の影響を受けない。
-    
+
     さらに M_ideal = Σ_utt y_i * y_j を基準として差を出す。これは予測分布が
     正解分布 y と一致した場合の配分で、曖昧な正解に由来するクラス間の重なりも
     含む。差の正値は基準より多い配分、負値は基準より少ない配分を意味し、
@@ -267,6 +267,7 @@ def diag_B_mass_matrix(probs, softs):
     excess = Mn - ideal_n
 
     print("\n  [B] 確率質量の配分行列（行=正解, 列=予測, 行方向に正規化）")
+    print("    値は誤分類件数ではなく、正解クラスの確率質量の配分割合")
     print(f"    {'正解\\予測':<13}" + "".join(f"{n:>10}" for n in CLASS_NAMES)
           + f"{'正解質量':>10}")
     print("    " + "-" * 75)
@@ -275,13 +276,29 @@ def diag_B_mass_matrix(probs, softs):
             (f"{Mn[i][j]:>9.3f}*" if i == j else f"{Mn[i][j]:>10.3f}")
             for j in range(K))
         print(f"    {CLASS_NAMES[i]:<13}{cells}{row[i][0]:>10.1f}")
-    print(f"\n    対角（正しい配分）の平均: {np.diag(Mn).mean():.4f}")
+    print("    ※ 行末の正解質量は、そのクラスの正解確率の全発話合計（件数ではない）")
 
-    off = sorted(((Mn[i][j], i, j) for i in range(K) for j in range(K)
-                  if i != j), reverse=True)
-    print("    主な流出（正解 → 予測）:")
-    for v, i, j in off[:5]:
-        print(f"      {CLASS_NAMES[i]:>12} → {CLASS_NAMES[j]:<12} {v:.3f}")
+    print("\n    基準差（予測配分 − 正解分布を再現した場合、単位: 割合ポイント）")
+    print("    正値=基準より多い配分 / 負値=基準より少ない配分")
+    print(f"    {'正解\\予測':<13}" + "".join(f"{n:>10}" for n in CLASS_NAMES))
+    print("    " + "-" * 63)
+    for i in range(K):
+        cells = "".join(f"{100 * excess[i, j]:>+9.1f}pp" for j in range(K))
+        print(f"    {CLASS_NAMES[i]:<13}{cells}")
+
+    diag_mean = float(np.diag(Mn).mean())
+    ideal_diag_mean = float(np.diag(ideal_n).mean())
+    print(f"\n    対角平均: 予測 {diag_mean:.4f} / 基準 {ideal_diag_mean:.4f} "
+          f"(差 {diag_mean - ideal_diag_mean:+.4f})")
+
+    off = sorted(((excess[i][j], i, j) for i in range(K) for j in range(K)
+                  if i != j and excess[i][j] > 0), reverse=True)
+    print("    基準より増えた主な配分（正解 → 予測）:")
+    if off:
+        for v, i, j in off[:5]:
+            print(f"      {CLASS_NAMES[i]:>12} → {CLASS_NAMES[j]:<12} {v * 100:+.1f}pp")
+    else:
+        print("      なし")
 
     mt, mp = softs.mean(axis=0), probs.mean(axis=0)
     print("\n    周辺分布の比較（全発話平均）")
@@ -291,7 +308,10 @@ def diag_B_mass_matrix(probs, softs):
         print(f"    {CLASS_NAMES[k]:<14}{mt[k]:>9.4f}{mp[k]:>9.4f}"
               f"{mp[k] - mt[k]:>+10.4f}")
 
-    return {"diag_mean": float(np.diag(Mn).mean())}
+    return {"diag_mean": diag_mean, "ideal_diag_mean": ideal_diag_mean,
+            "diag_excess": diag_mean - ideal_diag_mean,
+            "mass_matrix": Mn, "ideal_mass_matrix": ideal_n,
+            "excess_mass_matrix": excess}
 
 
 def diag_C_stickiness(probs):
