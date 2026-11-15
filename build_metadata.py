@@ -42,6 +42,10 @@ def build_metadata(iemo_root, output_dir='output_data'):
                     utterance_id, text = match.groups()
                     if not utterance_id.startswith(f'Ses0{session_num}'):
                         continue
+                    # Match the previous preprocessing behavior: exclude IDs
+                    # for unknown/other speakers (for example, FXX3 or MXX0).
+                    if 'XX' in utterance_id:
+                        continue
                     dialogue_id = utterance_id.rsplit('_', 1)[0]
                     speaker_id = utterance_id.rsplit('_', 1)[-1][:1]
 
