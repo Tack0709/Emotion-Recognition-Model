@@ -54,10 +54,10 @@ TENSORBOARD=false                # trueならTensorBoard出力を有効化
 RUN_ANALYSIS=true                # trueならエラー分析・対話別レポートも作成
 
 # 前処理の選択。既存ファイルを再利用する項目はfalse、新しく作る／作り直す項目はtrue。
-RUN_LABEL_PREPROCESSING=True    # EmoEvaluationからhard/soft labelを作成し、件数・割合をsummaryに保存
-RUN_METADATA_PREPROCESSING=True # 発話テキスト・対話順・話者vocabを作成
-RUN_BERT_FEATURE_EXTRACTION=True # text_dict.pklからBERT特徴量を抽出（モデル取得にネット接続が必要）
-RUN_WAV2VEC_FEATURE_EXTRACTION=True # 発話wavからwav2vec特徴量を抽出（非常に時間がかかる場合あり）
+RUN_LABEL_PREPROCESSING=true    # EmoEvaluationからhard/soft labelを作成し、件数・割合をsummaryに保存
+RUN_METADATA_PREPROCESSING=true # 発話テキスト・対話順・話者vocabを作成
+RUN_BERT_FEATURE_EXTRACTION=true # text_dict.pklからBERT特徴量を抽出（モデル取得にネット接続が必要）
+RUN_WAV2VEC_FEATURE_EXTRACTION=true # 発話wavからwav2vec特徴量を抽出（非常に時間がかかる場合あり）
 BERT_MODEL="bert-base-uncased"  # create_bert_features.pyで使用するモデル
 WAV2VEC_MODEL="facebook/wav2vec2-base-960h" # 音声特徴抽出モデル
 
