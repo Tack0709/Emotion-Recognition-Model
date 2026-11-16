@@ -62,6 +62,7 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
     # 同じ発話に複数評価者が同じタグを付けた場合、投票数には複数回、発話数には1回計上。
     raw_tag_vote_counts = defaultdict(int)
     raw_tag_utterances = defaultdict(set)
+    raw_tag_votes_by_utterance = defaultdict(lambda: defaultdict(int))
     
     current_utt_id = None
     current_soft_labels = []
@@ -110,6 +111,7 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
                                 if tag:
                                     raw_tag_vote_counts[tag] += 1
                                     raw_tag_utterances[tag].add(current_utt_id)
+                                    raw_tag_votes_by_utterance[current_utt_id][tag] += 1
                                     # Otherへの集約と追加 (1タグにつき1ベクトル追加)
                                     vec = mapping.get(tag, OTHER_VECTOR)
                                     current_soft_labels.append(vec)
@@ -160,6 +162,18 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
             xxx_count += 1
         recalc_count += 1
 
+    # 元タグがOtherへ集約され、最終ハードラベルもOtherとなった発話に限定して内訳を集計する。
+    hard_other_utterances = {
+        utt_id for utt_id, label_id in final_hard_label_dic.items() if label_id == 4
+    }
+    other_source_tag_votes = defaultdict(int)
+    other_source_tag_utterances = defaultdict(set)
+    for utt_id in hard_other_utterances:
+        for tag, vote_count in raw_tag_votes_by_utterance.get(utt_id, {}).items():
+            if tag not in mapping:
+                other_source_tag_votes[tag] += vote_count
+                other_source_tag_utterances[tag].add(utt_id)
+
     # =============================================================================
 
     # --- 4. ファイル保存 ---
@@ -200,6 +214,27 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
         print(f"  {tag} [{group}]: {count} 票 ({vote_ratio:.2f}%), "
               f"{utterance_count} 発話 ({utterance_ratio:.2f}%)")
     other_ratio = other_tag_votes / total_tag_votes * 100 if total_tag_votes else 0.0
+    other_hard_count = len(hard_other_utterances)
+    total_other_source_votes = sum(other_source_tag_votes.values())
+    other_tag_breakdown_lines = [
+        '[ハードラベルOtherの元タグ内訳]',
+        f'対象発話数: {other_hard_count}',
+        'Otherにマッピングされる元タグのみを集計。投票割合の分母は対象タグの全投票数、発話割合の分母はハードラベルOtherの発話数。',
+        '1発話に複数の元タグが付くため、発話割合の合計は100%を超える場合がある。',
+        '元タグ | 投票数 | Other内の投票割合 | ユニーク発話数 | Other発話に占める割合',
+    ]
+    for tag in sorted(other_source_tag_votes):
+        vote_count = other_source_tag_votes[tag]
+        vote_ratio = vote_count / total_other_source_votes * 100 if total_other_source_votes else 0.0
+        utterance_count = len(other_source_tag_utterances[tag])
+        utterance_ratio = utterance_count / other_hard_count * 100 if other_hard_count else 0.0
+        other_tag_breakdown_lines.append(
+            f'{tag} | {vote_count}票 | {vote_ratio:.2f}% | '
+            f'{utterance_count}発話 | {utterance_ratio:.2f}%'
+        )
+    other_tag_breakdown = '\n'.join(other_tag_breakdown_lines)
+    print('\n' + other_tag_breakdown)
+
     print(f"  Otherに集約される元タグ合計: {other_tag_votes} 票 ({other_ratio:.2f}%)")
 
     # ソフトラベルの分布エントロピー（自然対数、単位: nats）を帯ごとに集計。
@@ -225,6 +260,52 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
         print(f"  {band_label}: {count} 発話 ({ratio:.2f}%)")
     no_vote_ratio = no_vote_count / total_utterances * 100 if total_utterances else 0.0
     print(f"  投票なし（計算対象外）: {no_vote_count} 発話 ({no_vote_ratio:.2f}% of all utterances)")
+
+    summary_lines = [
+        'IEMOCAP Label Distribution Summary',
+        f'Total utterances: {total_utterances}',
+        f'XXX (annotation disagreement): {xxx_count} ({xxx_count / total_utterances * 100 if total_utterances else 0.0:.2f}%)',
+        '',
+        '[Hard-label counts and ratios]',
+    ]
+    for class_id, class_name in enumerate(class_names):
+        count = int(class_counts[class_id])
+        ratio = count / total_utterances * 100 if total_utterances else 0.0
+        summary_lines.append(f'{class_name}: {count} utterances ({ratio:.2f}%)')
+
+    summary_lines.extend([
+        '',
+        '[Raw annotation tags]',
+        'Tag | Mapped class | Votes | Share of all votes | Unique utterances | Share of all utterances',
+    ])
+    for tag in sorted(raw_tag_vote_counts):
+        vote_count = raw_tag_vote_counts[tag]
+        vote_ratio = vote_count / total_tag_votes * 100 if total_tag_votes else 0.0
+        utterance_count = len(raw_tag_utterances[tag])
+        utterance_ratio = utterance_count / total_utterances * 100 if total_utterances else 0.0
+        mapped_class = 'Other' if tag not in mapping else ('Happiness' if tag == 'Excited' else tag)
+        summary_lines.append(
+            f'{tag} | {mapped_class} | {vote_count} | {vote_ratio:.2f}% | '
+            f'{utterance_count} | {utterance_ratio:.2f}%'
+        )
+
+    summary_lines.extend([
+        '',
+        '[Hard-label Other source-tag breakdown]',
+        *other_tag_breakdown_lines[1:],
+        '',
+        '[Soft-label entropy bands (nats)]',
+        'Band | Utterances | Share of utterances with votes',
+    ])
+    for band_label, count in zip(entropy_band_labels, entropy_band_counts):
+        ratio = count / valid_entropy_count * 100 if valid_entropy_count else 0.0
+        summary_lines.append(f'{band_label} | {count} | {ratio:.2f}%')
+    summary_lines.append(f'No votes (entropy unavailable): {no_vote_count} ({no_vote_ratio:.2f}% of all utterances)')
+
+    summary_path = os.path.join(output_dir, 'label_distribution_summary.txt')
+    with open(summary_path, 'w', encoding='utf-8') as summary_file:
+        summary_file.write('\n'.join(summary_lines) + '\n')
+    print(f'ラベル分布サマリーを保存しました: {summary_path}')
 
     print(f"  ➡️  {hard_label_path}")
     print(f"  ➡️  {soft_label_path}")

@@ -8,6 +8,12 @@ from distribution_metrics import calculate_distribution_metrics
 
 # クラス定義
 EMOTION_NAMES = {0: 'Neutral', 1: 'Happy', 2: 'Sad', 3: 'Anger', 4: 'Other', 5: 'XXX'}
+ENTROPY_BANDS = [
+    ('0.0–<0.4', 0.4),
+    ('0.4–<0.8', 0.8),
+    ('0.8–<1.2', 1.2),
+    ('1.2–ln(5)', float('inf')),
+]
 
 def safe_calculate_entropy(probs):
     """エントロピー計算 (エラー時はNoneを返す)"""
@@ -28,6 +34,15 @@ def safe_calculate_entropy(probs):
         return -np.sum(probs * np.log(probs + epsilon))
     except Exception:
         return None
+
+def get_entropy_band_index(entropy):
+    """Return the existing label-summary entropy band index, or None."""
+    if entropy is None or not np.isfinite(entropy):
+        return None
+    for index, (_, upper_bound) in enumerate(ENTROPY_BANDS):
+        if entropy < upper_bound:
+            return index
+    return None
 
 def safe_calculate_kl_divergence(p, q):
     """KLダイバージェンス KL(P || Q) (エラー時はNoneを返す)"""
@@ -128,6 +143,11 @@ def analyze_errors(target_path, output_dir=None):
                 kl_div = distribution_metrics['kl']
                 t_entropy = safe_calculate_entropy(t_soft)
                 p_entropy = safe_calculate_entropy(p_prob)
+                entropy_gap = (
+                    p_entropy - t_entropy
+                    if t_entropy is not None and p_entropy is not None
+                    else None
+                )
 
                 # Top-2 判定 & ランク確認
                 is_top2_flip = False
@@ -165,7 +185,8 @@ def analyze_errors(target_path, output_dir=None):
                     'bc': distribution_metrics['bc'],
                     'r2': distribution_metrics['r2'],
                     't_entropy': t_entropy,
-                    'p_entropy': p_entropy
+                    'p_entropy': p_entropy,
+                    'entropy_gap': entropy_gap
                 })
 
         except Exception as e:
@@ -195,6 +216,67 @@ def analyze_errors(target_path, output_dir=None):
     avg_r2_text = f"{avg_r2:.4f}" if avg_r2 is not None else 'N/A (undefined for constant target distributions)'
     avg_t_ent = np.mean(valid_t_ents) if valid_t_ents else 0.0
     avg_p_ent = np.mean(valid_p_ents) if valid_p_ents else 0.0
+    valid_entropy_gaps = [
+        r['entropy_gap'] for r in all_results
+        if r['entropy_gap'] is not None and np.isfinite(r['entropy_gap'])
+    ]
+    avg_entropy_gap = np.mean(valid_entropy_gaps) if valid_entropy_gaps else None
+    mean_abs_entropy_gap = np.mean(np.abs(valid_entropy_gaps)) if valid_entropy_gaps else None
+    rmse_entropy_gap = np.sqrt(np.mean(np.square(valid_entropy_gaps))) if valid_entropy_gaps else None
+
+    def format_optional_metric(value):
+        return f'{value:.4f} nats' if value is not None else 'N/A'
+
+    entropy_gap_summary = [
+        'エントロピー差 ΔH = 推定分布 − 正解分布（nats）',
+        f'有効発話数: {len(valid_entropy_gaps)} / {total_samples}',
+        f'符号付き平均差: {format_optional_metric(avg_entropy_gap)}',
+        f'平均絶対差（ずれの大きさ）: {format_optional_metric(mean_abs_entropy_gap)}',
+        f'RMSE: {format_optional_metric(rmse_entropy_gap)}',
+        'ΔHがプラスなら推定分布の方が不確か、マイナスなら推定分布の方が確信的',
+    ]
+    entropy_gap_summary = '\n'.join(entropy_gap_summary)
+
+    true_entropy_band_stats = [{'count': 0, 'correct': 0} for _ in ENTROPY_BANDS]
+    pred_entropy_band_counts = [0 for _ in ENTROPY_BANDS]
+    valid_true_entropy_count = 0
+    valid_pred_entropy_count = 0
+    for result in all_results:
+        true_band = get_entropy_band_index(result['t_entropy'])
+        if true_band is not None:
+            true_entropy_band_stats[true_band]['count'] += 1
+            true_entropy_band_stats[true_band]['correct'] += int(result['is_correct'])
+            valid_true_entropy_count += 1
+
+        pred_band = get_entropy_band_index(result['p_entropy'])
+        if pred_band is not None:
+            pred_entropy_band_counts[pred_band] += 1
+            valid_pred_entropy_count += 1
+
+    entropy_band_lines = [
+        '正解分布エントロピー帯別の分類精度（nats）',
+        '帯 | 発話数 | 正解数 | 精度',
+    ]
+    for (band_label, _), stats in zip(ENTROPY_BANDS, true_entropy_band_stats):
+        band_accuracy = stats['correct'] / stats['count'] * 100 if stats['count'] else 0.0
+        entropy_band_lines.append(
+            f'{band_label} | {stats["count"]} | {stats["correct"]} | {band_accuracy:.2f}%'
+        )
+    entropy_band_lines.append(
+        f'正解エントロピーなし（集計対象外） | {total_samples - valid_true_entropy_count}'
+    )
+    entropy_band_lines.extend([
+        '',
+        '推定分布エントロピー帯別の発話数（有効な推定エントロピー内の割合）',
+        '帯 | 発話数 | 割合',
+    ])
+    for (band_label, _), count in zip(ENTROPY_BANDS, pred_entropy_band_counts):
+        share = count / valid_pred_entropy_count * 100 if valid_pred_entropy_count else 0.0
+        entropy_band_lines.append(f'{band_label} | {count} | {share:.2f}%')
+    entropy_band_lines.append(
+        f'推定エントロピーなし（集計対象外） | {total_samples - valid_pred_entropy_count}'
+    )
+    entropy_band_summary = '\n'.join(entropy_band_lines)
 
     # --- 2. 全件レポートの作成 ---
     accuracy = (total_correct / total_samples) * 100 if total_samples > 0 else 0
@@ -213,6 +295,8 @@ def analyze_errors(target_path, output_dir=None):
     print(f"Avg R2         : {avg_r2_text}")
     print(f"Avg T-Entropy  : {avg_t_ent:.4f}")
     print(f"Avg P-Entropy  : {avg_p_ent:.4f}")
+    print("\n" + entropy_gap_summary)
+    print("\n" + entropy_band_summary)
     print("-" * 30)
     print(f"Writing full report to {report_path} ...")
 
@@ -228,6 +312,8 @@ def analyze_errors(target_path, output_dir=None):
         f.write(f"Avg R2 (per-utterance): {avg_r2_text}\n")
         f.write(f"Avg T-Entropy    : {avg_t_ent:.4f} (Ambiguity of Ground Truth)\n")
         f.write(f"Avg P-Entropy    : {avg_p_ent:.4f} (Uncertainty of Model)\n")
+        f.write("\n" + entropy_gap_summary + "\n")
+        f.write("\n" + entropy_band_summary + "\n")
         f.write("="*80 + "\n")
         f.write("Legend:\n")
         f.write("  [CORRECT]       : Prediction matched Ground Truth\n")
@@ -274,6 +360,8 @@ def analyze_errors(target_path, output_dir=None):
             if res['r2'] is not None: metrics_str.append(f"R2: {res['r2']:.4f}")
             if res['t_entropy'] is not None: metrics_str.append(f"T-Entropy: {res['t_entropy']:.4f}")
             if res['p_entropy'] is not None: metrics_str.append(f"P-Entropy: {res['p_entropy']:.4f}")
+            if res['entropy_gap'] is not None:
+                metrics_str.append(f"Entropy ΔH (Pred-True): {res['entropy_gap']:+.4f} nats")
             
             if metrics_str:
                 f.write(f"Metrics -> {' | '.join(metrics_str)}\n")
@@ -309,6 +397,39 @@ def analyze_errors(target_path, output_dir=None):
             f.write("-" * 50 + "\n")
 
     # --- 対話の順序を保った全発話レポート ---
+    entropy_band_report_path = os.path.join(output_dir, 'entropy_band_analysis.txt')
+    with open(entropy_band_report_path, 'w', encoding='utf-8') as f:
+        f.write(f'Source: {target_path}\n')
+        f.write(f'Total evaluated samples: {total_samples}\n\n')
+        f.write(entropy_band_summary + '\n')
+    print(f'Wrote entropy-band analysis to {entropy_band_report_path}')
+
+    entropy_gap_report_path = os.path.join(output_dir, 'entropy_difference_analysis.txt')
+    with open(entropy_gap_report_path, 'w', encoding='utf-8') as f:
+        f.write(f'Source: {target_path}\n')
+        f.write(f'Total evaluated samples: {total_samples}\n\n')
+        f.write(entropy_gap_summary + '\n')
+        f.write('\nPer-utterance entropy differences (nats)\n')
+        f.write('Fold | True ID | Pred ID | True Entropy | Pred Entropy | ΔH (Pred-True) | |ΔH|\n')
+        for result in all_results:
+            gap = result['entropy_gap']
+            true_entropy = result['t_entropy']
+            pred_entropy = result['p_entropy']
+            true_entropy_text = f'{true_entropy:.4f}' if true_entropy is not None else 'N/A'
+            pred_entropy_text = f'{pred_entropy:.4f}' if pred_entropy is not None else 'N/A'
+            if gap is None:
+                gap_text = 'N/A'
+                abs_gap_text = 'N/A'
+            else:
+                gap_text = f'{gap:+.4f}'
+                abs_gap_text = f'{abs(gap):.4f}'
+            f.write(
+                f"{result['fold']} | {result['true_id']} | {result['pred_id']} | "
+                f'{true_entropy_text} | {pred_entropy_text} | '
+                f'{gap_text} | {abs_gap_text}\n'
+            )
+    print(f'Wrote entropy-difference analysis to {entropy_gap_report_path}')
+
     flow_report_path = os.path.join(output_dir, 'dialogue_flow_report.txt')
     if all_flow_records:
         all_flow_records.sort(key=lambda r: (
@@ -356,6 +477,10 @@ def analyze_errors(target_path, output_dir=None):
                 distribution_metrics = calculate_distribution_metrics(true_soft, pred_prob)
                 true_entropy_text = f"{true_entropy:.4f}" if true_entropy is not None else 'N/A'
                 pred_entropy_text = f"{pred_entropy:.4f}" if pred_entropy is not None else 'N/A'
+                entropy_gap = pred_entropy - true_entropy if (
+                    true_entropy is not None and pred_entropy is not None
+                ) else None
+                entropy_gap_text = f"{entropy_gap:+.4f} nats" if entropy_gap is not None else 'N/A'
                 turn = int(record.get('turn_index', 0)) + 1
 
                 f.write(f"\nTurn {turn:03d} | Speaker: {record.get('speaker', 'N/A')} | "
@@ -365,6 +490,7 @@ def analyze_errors(target_path, output_dir=None):
                         f"Ground-truth distribution: {format_distribution(true_soft)}\n")
                 f.write(f"Prediction entropy: {pred_entropy_text} | "
                         f"Prediction distribution: {format_distribution(pred_prob)}\n")
+                f.write(f"Entropy difference (prediction - ground truth): {entropy_gap_text}\n")
                 f.write("Distribution metrics: " + ", ".join(
                     f"{name}={value:.4f}" for name, value in (
                         ('KL', distribution_metrics['kl']),
