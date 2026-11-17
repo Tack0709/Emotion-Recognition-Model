@@ -262,6 +262,10 @@ def analyze_errors(target_path, output_dir=None):
         for _ in entropy_bands
     ]
     pred_entropy_band_counts = [0 for _ in entropy_bands]
+    entropy_band_cross_counts = [
+        [0 for _ in entropy_bands] for _ in entropy_bands
+    ]
+    valid_entropy_cross_count = 0
     valid_true_entropy_count = 0
     valid_pred_entropy_count = 0
     for result in all_results:
@@ -283,6 +287,9 @@ def analyze_errors(target_path, output_dir=None):
         if pred_band is not None:
             pred_entropy_band_counts[pred_band] += 1
             valid_pred_entropy_count += 1
+        if true_band is not None and pred_band is not None:
+            entropy_band_cross_counts[true_band][pred_band] += 1
+            valid_entropy_cross_count += 1
 
     entropy_band_lines = [
         '正解分布エントロピー帯別の分類精度（nats）',
@@ -351,6 +358,19 @@ def analyze_errors(target_path, output_dir=None):
         entropy_band_lines.append(f'{band_label} | {count} | {share:.2f}%')
     entropy_band_lines.append(
         f'推定エントロピーなし（集計対象外） | {total_samples - valid_pred_entropy_count}'
+    )
+    entropy_band_lines.extend([
+        '',
+        '正解エントロピー帯 × 推定エントロピー帯のクロス集計（発話数）',
+        '行: 正解分布エントロピー帯 / 列: 推定分布エントロピー帯',
+        '正解\\推定 | ' + ' | '.join(band_label for band_label, _ in entropy_bands),
+    ])
+    for (band_label, _), row in zip(entropy_bands, entropy_band_cross_counts):
+        entropy_band_lines.append(
+            f'{band_label} | ' + ' | '.join(str(count) for count in row)
+        )
+    entropy_band_lines.append(
+        f'クロス集計対象（両方のエントロピーが有効） | {valid_entropy_cross_count} / {total_samples}'
     )
     entropy_band_summary = '\n'.join(entropy_band_lines)
 
