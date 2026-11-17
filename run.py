@@ -48,10 +48,12 @@ class SoftNLLLoss(nn.Module):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('--data_dir', default='output_data', type=str, help='path to data directory')
+    parser.add_argument('--data_dir', default=None, type=str, help='path to data directory')
     parser.add_argument('--eval_metric', type=str, default='loss', choices=['f1', 'loss', 'kl'],
                         help='Metric to select best model (f1: maximize, loss: minimize NLL, kl: minimize KL)')
-    parser.add_argument('--test_session', type=int, default=5, choices=[1, 2, 3, 4, 5])
+    parser.add_argument('--test_session', type=int, default=None, choices=[1, 2, 3, 4, 5])
+    parser.add_argument('--test_only', action='store_true', help='Load a saved checkpoint and evaluate its test fold without training')
+    parser.add_argument('--checkpoint', type=str, default=None, help='Checkpoint path used with --test_only')
     parser.add_argument('--log_file_name', type=str, default=None)
     parser.add_argument('--dev_ratio', type=float, default=0.2)
     parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
@@ -100,6 +102,36 @@ if __name__ == '__main__':
     parser.add_argument('--edl_r2', action='store_true', help='Use EDL(R2) Loss and Dirichlet distribution')
  
     args = parser.parse_args()
+    checkpoint_data = None
+    if args.test_only:
+        if not args.checkpoint:
+            parser.error('--test_only requires --checkpoint')
+        if not os.path.isfile(args.checkpoint):
+            parser.error(f'Checkpoint not found: {args.checkpoint}')
+        checkpoint_data = torch.load(args.checkpoint, map_location='cpu')
+        saved_args = checkpoint_data.get('args')
+        if not isinstance(saved_args, dict):
+            parser.error('Checkpoint does not contain saved experiment arguments')
+
+        requested_data_dir = args.data_dir
+        requested_test_session = args.test_session
+        requested_no_cuda = args.no_cuda
+        requested_checkpoint = args.checkpoint
+        args = argparse.Namespace(**saved_args)
+        args.test_only = True
+        args.checkpoint = requested_checkpoint
+        args.data_dir = requested_data_dir or getattr(args, 'data_dir', None) or 'output_data'
+        checkpoint_fold = int(checkpoint_data.get('fold', args.test_session))
+        if requested_test_session is not None and requested_test_session != checkpoint_fold:
+            parser.error(
+                f'--test_session {requested_test_session} does not match checkpoint fold {checkpoint_fold}'
+            )
+        args.test_session = checkpoint_fold
+        args.no_cuda = requested_no_cuda
+    else:
+        args.data_dir = args.data_dir or 'output_data'
+        args.test_session = args.test_session or 5
+
     if args.full and (args.nma or args.train_ma_test_nma or args.train_nma_test_ma):
         parser.error('--full cannot be combined with --nma, --train_ma_test_nma, or --train_nma_test_ma')
     seed_everything(args.seed)
@@ -167,7 +199,8 @@ if __name__ == '__main__':
     if args.log_file_name:
         log_file_path = os.path.join(save_dir, args.log_file_name)
     else:
-        log_file_path = os.path.join(save_dir, f'logging_{args.eval_metric}_fold{args.test_session}_seed{args.seed}{logger_suffix}.log')
+        log_prefix = 'logging_test_only' if args.test_only else 'logging'
+        log_file_path = os.path.join(save_dir, f'{log_prefix}_{args.eval_metric}_fold{args.test_session}_seed{args.seed}{logger_suffix}.log')
 
     logger = get_logger(log_file_path)
     logger.info(f'Log file: {log_file_path}')
@@ -198,6 +231,17 @@ if __name__ == '__main__':
 
     print('building model..')
     model = DAGERC_multimodal(args, n_classes)
+    if args.test_only:
+        checkpoint_state = checkpoint_data.get('model_state_dict')
+        if checkpoint_state is None:
+            parser.error('Checkpoint does not contain model_state_dict')
+        checkpoint_n_classes = checkpoint_data.get('n_classes')
+        if checkpoint_n_classes is not None and int(checkpoint_n_classes) != n_classes:
+            parser.error(
+                f'Checkpoint has {checkpoint_n_classes} classes, but the current data has {n_classes}'
+            )
+        model.load_state_dict(checkpoint_state)
+        logger.info(f"Loaded checkpoint: {args.checkpoint}")
     if cuda: model.cuda()
 
     # --- 損失関数の定義 ---
@@ -206,6 +250,41 @@ if __name__ == '__main__':
         criterion = EDL_R2_Loss(annealing_step=args.epochs, lambda_coef=0.8, device='cuda' if cuda else 'cpu')
     else:
         criterion = SoftNLLLoss(reduction='sum')
+
+    if args.test_only:
+        args.nma = test_nma_flag
+        (test_loss, test_nll, test_kl, test_js, test_bc, test_r2, test_acc,
+         test_labels, test_preds, test_f1, test_probs, test_softs,
+         test_texts, test_flow_records) = train_or_eval_model(
+            model, criterion, test_loader, checkpoint_data.get('best_epoch', 0), cuda, args
+        )
+        analysis_data = {
+            'epoch': checkpoint_data.get('best_epoch', 0),
+            'fold': args.test_session,
+            'true_ids': test_labels,
+            'pred_ids': test_preds,
+            'pred_probs': test_probs,
+            'true_softs': test_softs,
+            'texts': test_texts,
+            'flow_records': test_flow_records,
+            'test_kl': test_kl,
+            'test_js': test_js,
+            'test_bc': test_bc,
+            'test_r2': test_r2,
+            'checkpoint': os.path.abspath(args.checkpoint),
+        }
+        test_output_dir = os.path.join(save_dir, 'test_only')
+        os.makedirs(test_output_dir, exist_ok=True)
+        result_path = os.path.join(test_output_dir, f'test_results_fold{args.test_session}.npy')
+        np.save(result_path, analysis_data)
+
+        logger.info(f"Test-only checkpoint epoch: {checkpoint_data.get('best_epoch', 'unknown')}")
+        logger.info(
+            f"Test [NLL {test_nll:.4f} KL {test_kl:.4f} JS {test_js:.4f} "
+            f"BC {test_bc:.4f} R2 {test_r2:.4f} F1 {test_f1:.2f} Acc {test_acc:.2f}]"
+        )
+        logger.info(f"Saved test-only results to {result_path}")
+        raise SystemExit(0)
 
     optimizer = AdamW(model.parameters() , lr=args.lr, weight_decay=1e-2)
 
@@ -298,6 +377,20 @@ if __name__ == '__main__':
                 'test_bc': test_bc,
                 'test_r2': test_r2
             }
+            checkpoint_dir = os.path.join(save_dir, 'best_model')
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_path = os.path.join(
+                checkpoint_dir, f'best_model_fold{args.test_session}.pt'
+            )
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'args': vars(args).copy(),
+                'n_classes': n_classes,
+                'fold': args.test_session,
+                'best_epoch': best_epoch,
+                'best_val_score': best_val_score,
+            }, checkpoint_path)
+            logger.info(f"Saved best model checkpoint to {checkpoint_path}")
 
     logger.info('finish training!')
     logger.info(f"Best Epoch: {best_epoch}")
