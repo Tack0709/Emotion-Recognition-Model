@@ -35,11 +35,12 @@ def safe_calculate_entropy(probs):
     except Exception:
         return None
 
-def get_entropy_band_index(entropy):
+def get_entropy_band_index(entropy, bands=None):
     """Return the existing label-summary entropy band index, or None."""
     if entropy is None or not np.isfinite(entropy):
         return None
-    for index, (_, upper_bound) in enumerate(ENTROPY_BANDS):
+    bands = bands or ENTROPY_BANDS
+    for index, (_, upper_bound) in enumerate(bands):
         if entropy < upper_bound:
             return index
     return None
@@ -95,6 +96,7 @@ def analyze_errors(target_path, output_dir=None):
     all_pred_ids = []
     all_results = [] 
     all_flow_records = []
+    label_names = EMOTION_NAMES.copy()
     
     total_samples = 0
     total_correct = 0
@@ -105,6 +107,9 @@ def analyze_errors(target_path, output_dir=None):
     for npy_file in file_list:
         try:
             data = np.load(npy_file, allow_pickle=True).item()
+            saved_label_names = data.get('label_names')
+            if isinstance(saved_label_names, dict) and saved_label_names:
+                label_names = {int(index): str(name) for index, name in saved_label_names.items()}
             fold_num = data.get('fold', '?')
             all_flow_records.extend(data.get('flow_records', []))
             
@@ -200,6 +205,18 @@ def analyze_errors(target_path, output_dir=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
+    class_count = next(
+        (len(result['pred_prob']) for result in all_results
+         if result['pred_prob'] is not None and len(result['pred_prob']) > 0),
+        max(label_names.keys(), default=4) + 1,
+    )
+    entropy_bands = [
+        ('0.0–<0.4', 0.4),
+        ('0.4–<0.8', 0.8),
+        ('0.8–<1.2', 1.2),
+        (f'1.2–ln({class_count})', float('inf')),
+    ]
+
     # --- 1. 平均値の計算 (ここを追加) ---
     # Noneを除外してリスト化
     valid_kls = [r['kl_div'] for r in all_results if r['kl_div'] is not None]
@@ -237,18 +254,18 @@ def analyze_errors(target_path, output_dir=None):
     ]
     entropy_gap_summary = '\n'.join(entropy_gap_summary)
 
-    true_entropy_band_stats = [{'count': 0, 'correct': 0} for _ in ENTROPY_BANDS]
-    pred_entropy_band_counts = [0 for _ in ENTROPY_BANDS]
+    true_entropy_band_stats = [{'count': 0, 'correct': 0} for _ in entropy_bands]
+    pred_entropy_band_counts = [0 for _ in entropy_bands]
     valid_true_entropy_count = 0
     valid_pred_entropy_count = 0
     for result in all_results:
-        true_band = get_entropy_band_index(result['t_entropy'])
+        true_band = get_entropy_band_index(result['t_entropy'], entropy_bands)
         if true_band is not None:
             true_entropy_band_stats[true_band]['count'] += 1
             true_entropy_band_stats[true_band]['correct'] += int(result['is_correct'])
             valid_true_entropy_count += 1
 
-        pred_band = get_entropy_band_index(result['p_entropy'])
+        pred_band = get_entropy_band_index(result['p_entropy'], entropy_bands)
         if pred_band is not None:
             pred_entropy_band_counts[pred_band] += 1
             valid_pred_entropy_count += 1
@@ -257,7 +274,7 @@ def analyze_errors(target_path, output_dir=None):
         '正解分布エントロピー帯別の分類精度（nats）',
         '帯 | 発話数 | 正解数 | 精度',
     ]
-    for (band_label, _), stats in zip(ENTROPY_BANDS, true_entropy_band_stats):
+    for (band_label, _), stats in zip(entropy_bands, true_entropy_band_stats):
         band_accuracy = stats['correct'] / stats['count'] * 100 if stats['count'] else 0.0
         entropy_band_lines.append(
             f'{band_label} | {stats["count"]} | {stats["correct"]} | {band_accuracy:.2f}%'
@@ -270,7 +287,7 @@ def analyze_errors(target_path, output_dir=None):
         '推定分布エントロピー帯別の発話数（有効な推定エントロピー内の割合）',
         '帯 | 発話数 | 割合',
     ])
-    for (band_label, _), count in zip(ENTROPY_BANDS, pred_entropy_band_counts):
+    for (band_label, _), count in zip(entropy_bands, pred_entropy_band_counts):
         share = count / valid_pred_entropy_count * 100 if valid_pred_entropy_count else 0.0
         entropy_band_lines.append(f'{band_label} | {count} | {share:.2f}%')
     entropy_band_lines.append(
@@ -322,8 +339,8 @@ def analyze_errors(target_path, output_dir=None):
         f.write("="*80 + "\n\n")
 
         for idx, res in enumerate(all_results):
-            t_name = EMOTION_NAMES.get(res['true_id'], str(res['true_id']))
-            p_name = EMOTION_NAMES.get(res['pred_id'], str(res['pred_id']))
+            t_name = label_names.get(int(res['true_id']), str(res['true_id']))
+            p_name = label_names.get(int(res['pred_id']), str(res['pred_id']))
             
             # ステータス表示
             if res['is_correct']:
@@ -380,7 +397,7 @@ def analyze_errors(target_path, output_dir=None):
                     if np.sum(t_arr) > 1.0 + 1e-5: t_arr /= np.sum(t_arr)
                     
                     for li in range(len(t_arr)):
-                        l_name = EMOTION_NAMES.get(li, str(li))
+                        l_name = label_names.get(li, str(li))
                         t_val = t_arr[li]
                         p_val = p_arr[li] if li < len(p_arr) else 0.0
                         diff = p_val - t_val 
@@ -447,7 +464,7 @@ def analyze_errors(target_path, output_dir=None):
                 return 'N/A'
             probs = probs / total
             return ', '.join(
-                f"{EMOTION_NAMES.get(i, str(i))}={prob:.4f}"
+                f"{label_names.get(i, str(i))}={prob:.4f}"
                 for i, prob in enumerate(probs)
             )
 
@@ -509,8 +526,8 @@ def analyze_errors(target_path, output_dir=None):
     unique_labels = sorted(list(set(all_true_ids) | set(all_pred_ids)))
     display_labels = []
     for uid in unique_labels:
-        if uid in EMOTION_NAMES:
-            display_labels.append(EMOTION_NAMES[uid])
+        if uid in label_names:
+            display_labels.append(label_names[uid])
         else:
             display_labels.append(str(uid))
 

@@ -58,6 +58,8 @@ if __name__ == '__main__':
     parser.add_argument('--dev_ratio', type=float, default=0.2)
     parser.add_argument('--nma', action='store_true', help='Include "xxx" labels and train with soft labels only')
     parser.add_argument('--full', action='store_true', help='Include all utterances and preserve session/dialogue order in every split')
+    parser.add_argument('--raw_emotions', action='store_true',
+                        help='Keep every original EmoEvaluation tag as its own distribution class')
     
     # ★既存: 学習はMA、テストはNMAで行うためのフラグ
     parser.add_argument('--train_ma_test_nma', action='store_true', help='Train on MA data (exclude XXX), but Test on NMA data (include XXX)')
@@ -193,6 +195,9 @@ if __name__ == '__main__':
         save_dir = os.path.join(base_save_dir, arch_name)
     else:
         save_dir = os.path.join(base_save_dir, args.modality)
+
+    if args.raw_emotions:
+        save_dir = os.path.join(save_dir, 'all_category')
     
     os.makedirs(save_dir, exist_ok=True)
      
@@ -225,6 +230,8 @@ if __name__ == '__main__':
         test_nma=test_nma_flag,   # ★テスト用設定
         preserve_order=args.full
     )
+    args.unknown_label_id = int(label_vocab.get('unknown_id', 5))
+    args.label_names = {int(index): str(name) for index, name in label_vocab['itos'].items()}
     
     n_classes = len(label_vocab['itos'])
     print('n_classes:', n_classes)
@@ -271,6 +278,7 @@ if __name__ == '__main__':
             'test_js': test_js,
             'test_bc': test_bc,
             'test_r2': test_r2,
+            'label_names': args.label_names,
             'checkpoint': os.path.abspath(args.checkpoint),
         }
         test_output_dir = os.path.join(save_dir, 'test_only')
@@ -375,7 +383,8 @@ if __name__ == '__main__':
                 'test_kl': test_kl,
                 'test_js': test_js,
                 'test_bc': test_bc,
-                'test_r2': test_r2
+                'test_r2': test_r2,
+                'label_names': args.label_names
             }
             checkpoint_dir = os.path.join(save_dir, 'best_model')
             os.makedirs(checkpoint_dir, exist_ok=True)

@@ -19,8 +19,27 @@ class MultimodalDAGDataset(Dataset):
 
         self.bert_features = np.load(os.path.join(data_dir, 'bert-base-diag.npy'), allow_pickle=True).item()
         self.w2v2_features = np.load(os.path.join(data_dir, 'w2v2-ft-diag.npy'), allow_pickle=True).item()
-        self.soft_labels = np.load(os.path.join(data_dir, 'IEMOCAP-softlabel-sum.npy'), allow_pickle=True).item()
-        self.hard_labels = np.load(os.path.join(data_dir, 'IEMOCAP-hardlabel.npy'), allow_pickle=True).item()
+        self.raw_emotions = bool(args and getattr(args, 'raw_emotions', False))
+        if self.raw_emotions:
+            self.soft_labels = np.load(
+                os.path.join(data_dir, 'IEMOCAP-softlabel-raw.npy'), allow_pickle=True
+            ).item()
+            self.hard_labels = np.load(
+                os.path.join(data_dir, 'IEMOCAP-hardlabel-raw.npy'), allow_pickle=True
+            ).item()
+            with open(os.path.join(data_dir, 'emotion_vocab_raw.pkl'), 'rb') as vocab_file:
+                self.emotion_vocab = pickle.load(vocab_file)
+            self.num_classes = len(self.emotion_vocab['itos'])
+            self.unknown_label_id = int(self.emotion_vocab['unknown_id'])
+        else:
+            self.soft_labels = np.load(
+                os.path.join(data_dir, 'IEMOCAP-softlabel-sum.npy'), allow_pickle=True
+            ).item()
+            self.hard_labels = np.load(
+                os.path.join(data_dir, 'IEMOCAP-hardlabel.npy'), allow_pickle=True
+            ).item()
+            self.num_classes = 5
+            self.unknown_label_id = 5
         
         with open(os.path.join(data_dir, 'order.pkl'), 'rb') as f:
             self.order = pickle.load(f)
@@ -81,7 +100,7 @@ class MultimodalDAGDataset(Dataset):
             hard_label = self.hard_labels.get(utt_id, -1)
             
             # Default時(nma=False)はXXX(5)をここで除外
-            if not self.nma and hard_label == 5:
+            if not self.nma and hard_label == self.unknown_label_id:
                 continue
 
             bert_feat = self.bert_features.get(utt_id)
@@ -97,7 +116,7 @@ class MultimodalDAGDataset(Dataset):
 
             soft_label_vec = self.soft_labels.get(utt_id)
             if soft_label_vec is None or hard_label == -1:
-                labels_soft_list.append(np.array([-1.0] * 5))
+                labels_soft_list.append(np.array([-1.0] * self.num_classes))
             else:
                 label_sum = np.sum(soft_label_vec)
                 if label_sum > 0:
@@ -108,7 +127,7 @@ class MultimodalDAGDataset(Dataset):
                     else:
                         labels_soft_list.append(soft_label_vec / label_sum)
                 else:
-                    labels_soft_list.append(np.array([-1.0] * 5))
+                    labels_soft_list.append(np.array([-1.0] * self.num_classes))
             
             speaker_char = utt_id.split('_')[-1][0]
             speakers_list.append(self.speaker_vocab['stoi'].get(speaker_char, 0))

@@ -34,6 +34,7 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         features_text = data[0].cuda() if cuda else data[0]
         features_audio = data[1].cuda() if cuda else data[1]
         labels_soft = data[2].cuda() if cuda else data[2]
+        num_classes = labels_soft.size(-1)
         adj = data[3].cuda() if cuda else data[3]
         s_mask = data[4].cuda() if cuda else data[4]
         s_mask_onehot = data[5].cuda() if cuda else data[5]
@@ -52,8 +53,8 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         valid_mask = (labels_soft.select(2, 0) != -1.0).unsqueeze(2) 
         
         if args.edl_r2:
-            valid_alpha = outputs.masked_select(valid_mask).view(-1, 5) 
-            valid_targets = labels_soft.masked_select(valid_mask).view(-1, 5)
+            valid_alpha = outputs.masked_select(valid_mask).view(-1, num_classes)
+            valid_targets = labels_soft.masked_select(valid_mask).view(-1, num_classes)
             loss = loss_function(valid_alpha, valid_targets, epoch + 1)
             
             alpha = outputs
@@ -63,8 +64,8 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
         else:
             prob = outputs
             log_prob = torch.log(prob + 1e-10)
-            valid_log_prob = log_prob.masked_select(valid_mask).view(-1, 5)
-            valid_targets = labels_soft.masked_select(valid_mask).view(-1, 5)
+            valid_log_prob = log_prob.masked_select(valid_mask).view(-1, num_classes)
+            valid_targets = labels_soft.masked_select(valid_mask).view(-1, num_classes)
             loss_sum = loss_function(valid_log_prob, valid_targets)
             loss = loss_sum / valid_mask.sum() if valid_mask.sum() > 0 else torch.tensor(0.0).to(outputs.device)
 
@@ -111,7 +112,8 @@ def train_or_eval_model(model, loss_function, dataloader, epoch, cuda, args, opt
                     
                     if args.nma and not getattr(args, 'full', False):
                         # NMAモード: XXX(5) のみ評価する -> 5以外ならスキップ
-                        if true_label_id != 5:
+                        unknown_label_id = getattr(args, 'unknown_label_id', 5)
+                        if true_label_id != unknown_label_id:
                             continue
                     else:
                         # Defaultモード: Loaderから来るデータ(XXX以外)を全て評価

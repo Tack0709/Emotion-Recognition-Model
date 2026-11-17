@@ -2,6 +2,7 @@ import os
 import argparse
 import numpy as np
 import sys
+import pickle
 from collections import defaultdict
 
 def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_data'):
@@ -162,6 +163,32 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
             xxx_count += 1
         recalc_count += 1
 
+    # 元の評価タグを統合せず、タグごとに独立した分布ラベルも作成する。
+    raw_emotion_tags = sorted(raw_tag_vote_counts)
+    raw_emotion_stoi = {tag: index for index, tag in enumerate(raw_emotion_tags)}
+    raw_emotion_vocab = {
+        'stoi': raw_emotion_stoi,
+        'itos': {index: tag for tag, index in raw_emotion_stoi.items()},
+        # 投票なし・最多票同数のhard labelに使う番兵ID（出力クラスには含めない）。
+        'unknown_id': len(raw_emotion_tags),
+    }
+    raw_soft_label_dic = {}
+    raw_hard_label_dic = {}
+    for utt_id in soft_label_dic:
+        raw_vote_vector = np.zeros(len(raw_emotion_tags), dtype=np.int64)
+        for tag, count in raw_tag_votes_by_utterance.get(utt_id, {}).items():
+            raw_vote_vector[raw_emotion_stoi[tag]] = count
+        raw_soft_label_dic[utt_id] = raw_vote_vector
+
+        if raw_vote_vector.sum() == 0:
+            raw_hard_label_dic[utt_id] = raw_emotion_vocab['unknown_id']
+        else:
+            raw_winners = np.flatnonzero(raw_vote_vector == raw_vote_vector.max())
+            raw_hard_label_dic[utt_id] = (
+                int(raw_winners[0]) if len(raw_winners) == 1
+                else raw_emotion_vocab['unknown_id']
+            )
+
     # 元タグがOtherへ集約され、最終ハードラベルもOtherとなった発話に限定して内訳を集計する。
     hard_other_utterances = {
         utt_id for utt_id, label_id in final_hard_label_dic.items() if label_id == 4
@@ -179,10 +206,17 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
     # --- 4. ファイル保存 ---
     hard_label_path = os.path.join(output_dir, 'IEMOCAP-hardlabel.npy')
     soft_label_path = os.path.join(output_dir, 'IEMOCAP-softlabel-sum.npy')
+    raw_hard_label_path = os.path.join(output_dir, 'IEMOCAP-hardlabel-raw.npy')
+    raw_soft_label_path = os.path.join(output_dir, 'IEMOCAP-softlabel-raw.npy')
+    raw_vocab_path = os.path.join(output_dir, 'emotion_vocab_raw.pkl')
 
     try:
         np.save(hard_label_path, final_hard_label_dic)
         np.save(soft_label_path, soft_label_dic)
+        np.save(raw_hard_label_path, raw_hard_label_dic)
+        np.save(raw_soft_label_path, raw_soft_label_dic)
+        with open(raw_vocab_path, 'wb') as vocab_file:
+            pickle.dump(raw_emotion_vocab, vocab_file)
     except Exception as e:
         print(f"エラー: ファイルの保存中に問題が発生しました: {e}")
         sys.exit(1)
@@ -291,6 +325,15 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
 
     summary_lines.extend([
         '',
+        '[Class IDs for the unaggregated raw-tag mode]',
+        f'Number of distribution classes: {len(raw_emotion_tags)}',
+        'Class ID | Original tag',
+    ])
+    for tag, class_id in raw_emotion_stoi.items():
+        summary_lines.append(f'{class_id} | {tag}')
+
+    summary_lines.extend([
+        '',
         '[Hard-label Other source-tag breakdown]',
         *other_tag_breakdown_lines[1:],
         '',
@@ -309,6 +352,7 @@ def create_label_files(iemo_root='IEMOCAP_full_release/', output_dir='output_dat
 
     print(f"  ➡️  {hard_label_path}")
     print(f"  ➡️  {soft_label_path}")
+    print(f"Raw-tag labels: {len(raw_emotion_tags)} classes -> {raw_soft_label_path}")
     
     if len(final_hard_label_dic) != 10039:
         print(f"Warning: 期待される発話数(10039)と一致しません。 検出数: {len(final_hard_label_dic)}")
