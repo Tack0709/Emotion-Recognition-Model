@@ -254,15 +254,29 @@ def analyze_errors(target_path, output_dir=None):
     ]
     entropy_gap_summary = '\n'.join(entropy_gap_summary)
 
-    true_entropy_band_stats = [{'count': 0, 'correct': 0} for _ in entropy_bands]
+    true_entropy_band_stats = [
+        {
+            'count': 0, 'correct': 0, 'kl': [], 'js': [], 'bc': [], 'r2': [],
+            'entropy_gaps': [],
+        }
+        for _ in entropy_bands
+    ]
     pred_entropy_band_counts = [0 for _ in entropy_bands]
     valid_true_entropy_count = 0
     valid_pred_entropy_count = 0
     for result in all_results:
         true_band = get_entropy_band_index(result['t_entropy'], entropy_bands)
         if true_band is not None:
-            true_entropy_band_stats[true_band]['count'] += 1
-            true_entropy_band_stats[true_band]['correct'] += int(result['is_correct'])
+            stats = true_entropy_band_stats[true_band]
+            stats['count'] += 1
+            stats['correct'] += int(result['is_correct'])
+            for metric in ('kl', 'js', 'bc', 'r2'):
+                value = result[f'{metric}_div'] if metric in ('kl', 'js') else result[metric]
+                if value is not None and np.isfinite(value):
+                    stats[metric].append(value)
+            gap = result['entropy_gap']
+            if gap is not None and np.isfinite(gap):
+                stats['entropy_gaps'].append(gap)
             valid_true_entropy_count += 1
 
         pred_band = get_entropy_band_index(result['p_entropy'], entropy_bands)
@@ -278,6 +292,51 @@ def analyze_errors(target_path, output_dir=None):
         band_accuracy = stats['correct'] / stats['count'] * 100 if stats['count'] else 0.0
         entropy_band_lines.append(
             f'{band_label} | {stats["count"]} | {stats["correct"]} | {band_accuracy:.2f}%'
+        )
+    entropy_band_lines.append(
+        f'正解エントロピーなし（集計対象外） | {total_samples - valid_true_entropy_count}'
+    )
+    entropy_band_lines.extend([
+        '',
+        '正解分布エントロピー帯別のエントロピー変化（ΔH = 推定 - 正解、nats）',
+        '帯 | 有効発話数 | ΔH平均（符号付き） | 平均絶対差 | RMSE',
+    ])
+    for (band_label, _), stats in zip(entropy_bands, true_entropy_band_stats):
+        gaps = stats['entropy_gaps']
+        if gaps:
+            gap_values = (
+                f'{np.mean(gaps):+.4f}',
+                f'{np.mean(np.abs(gaps)):.4f}',
+                f'{np.sqrt(np.mean(np.square(gaps))):.4f}',
+            )
+        else:
+            gap_values = ('N/A', 'N/A', 'N/A')
+        entropy_band_lines.append(
+            f'{band_label} | {len(gaps)} | ' + ' | '.join(gap_values)
+        )
+    overall_gap_values = (
+        f'{avg_entropy_gap:+.4f}' if avg_entropy_gap is not None else 'N/A',
+        f'{mean_abs_entropy_gap:.4f}' if mean_abs_entropy_gap is not None else 'N/A',
+        f'{rmse_entropy_gap:.4f}' if rmse_entropy_gap is not None else 'N/A',
+    )
+    entropy_band_lines.append(
+        f'全体 | {len(valid_entropy_gaps)} | ' + ' | '.join(overall_gap_values)
+    )
+    entropy_band_lines.append(
+        f'正解エントロピーなし（集計対象外） | {total_samples - valid_true_entropy_count}'
+    )
+    entropy_band_lines.extend([
+        '',
+        '正解分布エントロピー帯別の分布推定性能（発話単位の平均）',
+        '帯 | 発話数 | KL | JS | BC | R2',
+    ])
+    for (band_label, _), stats in zip(entropy_bands, true_entropy_band_stats):
+        metric_values = []
+        for metric in ('kl', 'js', 'bc', 'r2'):
+            values = stats[metric]
+            metric_values.append(f'{np.mean(values):.4f}' if values else 'N/A')
+        entropy_band_lines.append(
+            f'{band_label} | {stats["count"]} | ' + ' | '.join(metric_values)
         )
     entropy_band_lines.append(
         f'正解エントロピーなし（集計対象外） | {total_samples - valid_true_entropy_count}'
