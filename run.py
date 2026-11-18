@@ -196,9 +196,8 @@ if __name__ == '__main__':
     else:
         save_dir = os.path.join(base_save_dir, args.modality)
 
-    if arch_name == 'dag_erc':
-        nodal_att_name = args.nodal_att_type or 'none'
-        save_dir = os.path.join(save_dir, f'nodal_{nodal_att_name}')
+    if arch_name == 'dag_erc' and args.nodal_att_type is not None:
+        save_dir = os.path.join(save_dir, f'nodal_{args.nodal_att_type}')
 
     if args.raw_emotions:
         save_dir = os.path.join(save_dir, 'all_category')

@@ -51,10 +51,8 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     else:
         target_dir_pattern = os.path.join(base_dir_pattern, modality)
 
-    if arch_name == 'dag_erc':
-        target_dir_pattern = os.path.join(
-            target_dir_pattern, f"nodal_{nodal_att_type or 'none'}"
-        )
+    if arch_name == 'dag_erc' and nodal_att_type is not None:
+        target_dir_pattern = os.path.join(target_dir_pattern, f'nodal_{nodal_att_type}')
     if raw_emotions:
         target_dir_pattern = os.path.join(target_dir_pattern, 'all_category')
 
@@ -106,6 +104,7 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     result_lines.append(f"Metric      : {eval_metric}")
     result_lines.append(f"Modality    : {modality}")
     result_lines.append(f"Mode        : {mode_dirname}")
+    result_lines.append(f"Label Mode  : {'raw emotions' if raw_emotions else 'aggregated'}")
     result_lines.append(f"Seed        : {seed if seed is not None else 'All'}")
     result_lines.append(f"Found Logs  : {len(log_files)}")
     result_lines.append("-" * 40)
@@ -230,7 +229,8 @@ if __name__ == "__main__":
     parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
     parser.add_argument('--full', action='store_true')
     parser.add_argument('--nodal_att_type', type=str, choices=['global', 'past'], default=None)
-    parser.add_argument('--raw_emotions', action='store_true')
+    parser.add_argument('--raw_emotions', action='store_true',
+                        help='Search logs under the all_category directory')
     
     args = parser.parse_args()
     

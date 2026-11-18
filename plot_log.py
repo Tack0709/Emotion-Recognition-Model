@@ -40,10 +40,8 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
         mod_pat = modality if modality else '*'
         target_dir_pattern = os.path.join(base_dir_pattern, mod_pat)
 
-    if arch_name == 'dag_erc':
-        target_dir_pattern = os.path.join(
-            target_dir_pattern, f"nodal_{nodal_att_type or 'none'}"
-        )
+    if arch_name == 'dag_erc' and nodal_att_type is not None:
+        target_dir_pattern = os.path.join(target_dir_pattern, f'nodal_{nodal_att_type}')
     if raw_emotions:
         target_dir_pattern = os.path.join(target_dir_pattern, 'all_category')
 
