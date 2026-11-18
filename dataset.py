@@ -63,10 +63,8 @@ class MultimodalDAGDataset(Dataset):
             else:
                 train_sessions.append(ses_id)
         
-        preserve_order = bool(args and getattr(args, 'full', False))
-        if not preserve_order:
-            random.seed(args.seed if args else 42)
-            random.shuffle(train_sessions)
+        random.seed(args.seed if args else 42)
+        random.shuffle(train_sessions)
         dev_size = int(len(train_sessions) * dev_ratio)
         dev_sessions = train_sessions[:dev_size]
         train_sessions = train_sessions[dev_size:]
