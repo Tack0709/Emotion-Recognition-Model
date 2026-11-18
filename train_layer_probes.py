@@ -53,7 +53,7 @@ def evaluate(targets, predictions):
     }
 
 
-def train_one_layer(layer, train, dev, test, output_dir, device, seed, epochs, batch_size, learning_rate):
+def train_one_layer(layer, train, dev, eval_data, eval_split, output_dir, device, seed, epochs, batch_size, learning_rate):
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -97,7 +97,10 @@ def train_one_layer(layer, train, dev, test, output_dir, device, seed, epochs, b
                os.path.join(output_dir, f'{layer}_probe.pt'))
 
     rows = []
-    for split_name, split_data in (('train', train), ('dev', dev), ('test', test)):
+    eval_sets = [('train', train)]
+    if eval_split != 'train':
+        eval_sets.append((eval_split, eval_data))
+    for split_name, split_data in eval_sets:
         probabilities = predict(head, split_data[layer], device, batch_size)
         metrics = evaluate(split_data['true_soft'], probabilities)
         rows.append({
@@ -117,10 +120,11 @@ def train_one_layer(layer, train, dev, test, output_dir, device, seed, epochs, b
 
 
 def train_probes(fold_dir, output_dir=None, seed=1, epochs=100, batch_size=256,
-                 learning_rate=1e-3, device='auto'):
+                 learning_rate=1e-3, device='auto', eval_split='dev'):
     feature_dir = os.path.join(fold_dir, 'features')
-    train, dev, test = [load_npz(os.path.join(feature_dir, f'{split}_features.npz'))
-                        for split in ('train', 'dev', 'test')]
+    train = load_npz(os.path.join(feature_dir, 'train_features.npz'))
+    dev = load_npz(os.path.join(feature_dir, 'dev_features.npz'))
+    eval_data = dev if eval_split == 'dev' else load_npz(os.path.join(feature_dir, 'test_features.npz'))
     output_dir = output_dir or os.path.join(fold_dir, 'probe')
     os.makedirs(output_dir, exist_ok=True)
     if device == 'auto':
@@ -128,7 +132,7 @@ def train_probes(fold_dir, output_dir=None, seed=1, epochs=100, batch_size=256,
     rows, curves = [], {}
     for layer in LAYERS:
         layer_rows, curve = train_one_layer(
-            layer, train, dev, test, output_dir, torch.device(device), seed,
+            layer, train, dev, eval_data, eval_split, output_dir, torch.device(device), seed,
             epochs, batch_size, learning_rate,
         )
         rows.extend(layer_rows)
@@ -151,13 +155,13 @@ def train_probes(fold_dir, output_dir=None, seed=1, epochs=100, batch_size=256,
         result_file.write(f'Epochs: {epochs}; batch size: {batch_size}; learning rate: {learning_rate}; seed: {seed}\n')
 
     import matplotlib.pyplot as plt
-    test_rows = [row for row in rows if row['split'] == 'test']
+    eval_rows = [row for row in rows if row['split'] == eval_split]
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar([row['layer'] for row in test_rows], [row['nll'] for row in test_rows])
-    ax.set_ylabel('Test NLL')
+    ax.bar([row['layer'] for row in eval_rows], [row['nll'] for row in eval_rows])
+    ax.set_ylabel(f'{eval_split.title()} NLL')
     ax.set_title('Linear probe by layer')
     fig.tight_layout()
-    fig.savefig(os.path.join(output_dir, 'probe_nll.png'), dpi=160)
+    fig.savefig(os.path.join(output_dir, f'probe_nll_{eval_split}.png'), dpi=160)
     plt.close(fig)
     print(f'Saved probe results to {output_dir}')
 
@@ -171,9 +175,10 @@ def main():
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--device', default='auto', choices=['auto', 'cpu', 'cuda'])
+    parser.add_argument('--eval_split', choices=['dev', 'test'], default='dev')
     args = parser.parse_args()
     train_probes(args.fold_dir, args.output_dir, args.seed, args.epochs,
-                 args.batch_size, args.learning_rate, args.device)
+                 args.batch_size, args.learning_rate, args.device, args.eval_split)
 
 
 if __name__ == '__main__':

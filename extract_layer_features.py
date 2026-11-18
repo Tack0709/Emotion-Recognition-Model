@@ -91,7 +91,7 @@ def extract_split(model, loader, device, output_path, metadata, overwrite=False)
 
 
 def extract_checkpoint(checkpoint_path, data_dir=None, output_dir='layer_analysis', overwrite=False,
-                       expected_seed=None, expected_fold=None):
+                       expected_seed=None, expected_fold=None, splits=('train', 'dev')):
     checkpoint = load_checkpoint(checkpoint_path)
     saved_args = checkpoint.get('args')
     if not isinstance(saved_args, dict):
@@ -143,7 +143,9 @@ def extract_checkpoint(checkpoint_path, data_dir=None, output_dir='layer_analysi
     fold_dir = os.path.join(output_dir, f"seed{args.seed}", f"fold{args.test_session}", 'features')
     os.makedirs(fold_dir, exist_ok=True)
     class_names = [label_vocab['itos'][i] for i in range(len(label_vocab['itos']))]
-    for split_name, loader in (('train', train_loader), ('dev', dev_loader), ('test', test_loader)):
+    loaders = {'train': train_loader, 'dev': dev_loader, 'test': test_loader}
+    for split_name in splits:
+        loader = loaders[split_name]
         output_path = os.path.join(fold_dir, f'{split_name}_features.npz')
         extract_split(
             model, loader, device, output_path,
@@ -166,9 +168,11 @@ def main():
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--expected_seed', type=int, default=None)
     parser.add_argument('--expected_fold', type=int, default=None)
+    parser.add_argument('--splits', nargs='+', choices=['train', 'dev', 'test'],
+                        default=['train', 'dev'])
     args = parser.parse_args()
     extract_checkpoint(args.checkpoint, args.data_dir, args.output_dir, args.overwrite,
-                       args.expected_seed, args.expected_fold)
+                       args.expected_seed, args.expected_fold, args.splits)
 
 
 if __name__ == '__main__':

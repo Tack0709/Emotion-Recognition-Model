@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full IEMOCAP DAG-ERCの層間特徴分析を、既存Noneチェックポイントでfoldごとに実行する。
 # DAG-ERC本体は再学習しない。Step 2のLinear Probeだけを新規学習する。
-# 実行例: bash run_full.sh
+# 実行例: ./run_layer_analysis.sh
 
 set -euo pipefail
 
@@ -14,7 +14,9 @@ CHECKPOINT_DIR="saved_models/seed1/full/multimodal/best_model"
 ANALYSIS_ROOT="layer_analysis"
 IEMOCAP_ROOT="/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release"
 SEED=1
-FOLDS=(1 2 3 4 5)
+FOLDS=(1)
+ANALYSIS_SPLITS=("train" "dev")
+EVAL_SPLIT="dev"                    # probe / ablation / ambiguity の評価対象: dev / test
 DEVICE="auto"                         # auto / cpu / cuda
 OVERWRITE_FEATURES=false              # trueの場合、既存features/*.npzを再生成
 
@@ -27,12 +29,12 @@ BERT_MODEL="bert-base-uncased"
 WAV2VEC_MODEL="facebook/wav2vec2-base-960h"
 
 # Stepごとの実行選択。後続Stepは、前段階の出力が存在すること。
-RUN_FEATURE_EXTRACTION=true            # Step 0: checkpointからtrain/dev/test特徴を抽出
+RUN_FEATURE_EXTRACTION=true            # Step 0: checkpointからtrain/dev特徴を抽出（Testは明示指定時のみ）
 RUN_CKA=true                           # Step 1: dev上のH0-H4 Linear CKA
-RUN_LAYER_PROBES=true                  # Step 2: H0-H4とFusedのLinear Probeを学習
-RUN_LAYER_ABLATION=true                # Step 3: 固定MLPの特徴ブロック置換
-RUN_AMBIGUITY_ANALYSIS=true            # Step 4: train由来entropy境界による曖昧度別集計
-RUN_FOLD_SUMMARY=true                  # fold別結果をseed単位で集計
+RUN_LAYER_PROBES=false                 # Step 2: Trainで学習、Devで評価
+RUN_LAYER_ABLATION=false               # Step 3: Train平均で置換、Devで評価
+RUN_AMBIGUITY_ANALYSIS=false           # Step 4: Train由来entropy境界をDevに適用
+RUN_FOLD_SUMMARY=false                 # fold別結果をseed単位で集計
 
 # ProbeはDAG-ERC本体を固定したまま、Probe層だけを学習する。
 PROBE_EPOCHS=100
@@ -109,14 +111,18 @@ for fold in "${FOLDS[@]}"; do
         fi
     fi
     if [[ "$RUN_FEATURE_EXTRACTION" != true && ( "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ) ]]; then
-        for split in train dev test; do
+        for split in train dev; do
             if [[ ! -f "$FEATURE_DIR/${split}_features.npz" ]]; then
                 echo "抽出済み特徴ファイルがありません: $FEATURE_DIR/${split}_features.npz" >&2
                 exit 1
             fi
         done
+        if [[ "$EVAL_SPLIT" == test && ( "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ) && ! -f "$FEATURE_DIR/test_features.npz" ]]; then
+            echo "Test評価を指定していますが特徴ファイルがありません: $FEATURE_DIR/test_features.npz" >&2
+            exit 1
+        fi
     fi
-    if [[ "$RUN_AMBIGUITY_ANALYSIS" == true && "$RUN_LAYER_PROBES" != true && ! -f "$FOLD_DIR/probe/predictions/test_H0.npz" ]]; then
+    if [[ "$RUN_AMBIGUITY_ANALYSIS" == true && "$RUN_LAYER_PROBES" != true && ! -f "$FOLD_DIR/probe/predictions/${EVAL_SPLIT}_H0.npz" ]]; then
         echo "曖昧度別Probe分析には既存のProbe予測が必要です: $FOLD_DIR/probe/predictions/" >&2
         exit 1
     fi
@@ -134,6 +140,10 @@ for fold in "${FOLDS[@]}"; do
 
     if [[ "$RUN_FEATURE_EXTRACTION" == true ]]; then
         OVERWRITE_ARGS=()
+        SPLIT_ARGS=("${ANALYSIS_SPLITS[@]}")
+        if [[ "$EVAL_SPLIT" == test && ( "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ) ]]; then
+            SPLIT_ARGS+=(test)
+        fi
         if [[ "$OVERWRITE_FEATURES" == true ]]; then
             OVERWRITE_ARGS+=(--overwrite)
         fi
@@ -143,6 +153,7 @@ for fold in "${FOLDS[@]}"; do
             --output_dir "$ANALYSIS_ROOT" \
             --expected_seed "$SEED" \
             --expected_fold "$fold" \
+            --splits "${SPLIT_ARGS[@]}" \
             "${OVERWRITE_ARGS[@]}"
     fi
 
@@ -159,6 +170,7 @@ for fold in "${FOLDS[@]}"; do
             --epochs "$PROBE_EPOCHS" \
             --batch_size "$PROBE_BATCH_SIZE" \
             --learning_rate "$PROBE_LEARNING_RATE" \
+            --eval_split "$EVAL_SPLIT" \
             --device "$DEVICE"
     fi
 
@@ -167,16 +179,25 @@ for fold in "${FOLDS[@]}"; do
             --checkpoint "$CHECKPOINT" \
             --fold_dir "$FOLD_DIR" \
             --data_dir "$DATA_DIR" \
+            --eval_split "$EVAL_SPLIT" \
             --device "$DEVICE"
     fi
 
     if [[ "$RUN_AMBIGUITY_ANALYSIS" == true ]]; then
-        python analyze_layer_ambiguity.py --fold_dir "$FOLD_DIR"
+        python analyze_layer_ambiguity.py --fold_dir "$FOLD_DIR" --eval_split "$EVAL_SPLIT"
     fi
 done
 
 if [[ "$RUN_FOLD_SUMMARY" == true ]]; then
-    python summarize_layer_analysis.py --root "$ANALYSIS_ROOT" --seed "$SEED"
+    SUMMARY_ARGS=()
+    FOLD_LIST=" ${FOLDS[*]} "
+    if [[ "$FOLD_LIST" == *" 1 "* && "$FOLD_LIST" == *" 2 "* && \
+          "$FOLD_LIST" == *" 3 "* && "$FOLD_LIST" == *" 4 "* && \
+          "$FOLD_LIST" == *" 5 "* ]]; then
+        SUMMARY_ARGS+=(--require_all_folds)
+    fi
+    python summarize_layer_analysis.py --root "$ANALYSIS_ROOT" --seed "$SEED" \
+        --eval_split "$EVAL_SPLIT" "${SUMMARY_ARGS[@]}"
 fi
 
 echo "Layer analysis completed: $ANALYSIS_ROOT/seed${SEED}"

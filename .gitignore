@@ -4,6 +4,6 @@ npy_text_results/
 saved_models/
 *.png
 *.sh
-!run_full.sh
+!run_layer_analysis.sh
 seed30_before_soturon
 before_soturon

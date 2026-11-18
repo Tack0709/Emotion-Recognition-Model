@@ -22,11 +22,13 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
-def aggregate_rows(paths, key_fields, metric_fields, output_path):
+def aggregate_rows(paths, key_fields, metric_fields, output_path, eval_split='dev'):
     groups = defaultdict(lambda: defaultdict(list))
     counts = defaultdict(list)
     for path in paths:
         for row in read_csv(path):
+            if 'split' in row and row['split'] != eval_split:
+                continue
             key = tuple(row[field] for field in key_fields)
             if 'count' in row:
                 counts[key].append(float(row['count']))
@@ -53,11 +55,15 @@ def aggregate_rows(paths, key_fields, metric_fields, output_path):
     write_csv(output_path, output_rows)
 
 
-def summarize(root, seed=1):
+def summarize(root, seed=1, eval_split='dev', require_all_folds=False):
     seed_dir = os.path.join(root, f'seed{seed}')
     fold_dirs = sorted(glob.glob(os.path.join(seed_dir, 'fold*')))
     if not fold_dirs:
         raise FileNotFoundError(f'No fold analysis directories found under {seed_dir}')
+    fold_numbers = sorted(int(os.path.basename(path)[4:]) for path in fold_dirs
+                          if os.path.basename(path)[4:].isdigit())
+    if require_all_folds and fold_numbers != [1, 2, 3, 4, 5]:
+        raise ValueError(f'5-fold summary requires folds 1-5; found {fold_numbers}')
     summary_dir = os.path.join(seed_dir, 'summary')
     os.makedirs(summary_dir, exist_ok=True)
 
@@ -101,24 +107,24 @@ def summarize(root, seed=1):
     probe_paths = glob.glob(os.path.join(seed_dir, 'fold*', 'probe', 'probe_metrics.csv'))
     if probe_paths:
         aggregate_rows(probe_paths, ['layer', 'split'], ['nll', 'kl', 'js', 'bc', 'tvd'],
-                       os.path.join(summary_dir, 'probe_summary.csv'))
+                       os.path.join(summary_dir, 'probe_summary.csv'), eval_split)
 
     ablation_paths = glob.glob(os.path.join(seed_dir, 'fold*', 'ablation', 'ablation_metrics.csv'))
     if ablation_paths:
         aggregate_rows(ablation_paths, ['split', 'condition'],
                        ['nll', 'delta_nll_vs_baseline', 'kl', 'js', 'bc', 'tvd'],
-                       os.path.join(summary_dir, 'ablation_summary.csv'))
+                       os.path.join(summary_dir, 'ablation_summary.csv'), eval_split)
 
     ambiguity_probe_paths = glob.glob(os.path.join(seed_dir, 'fold*', 'ambiguity', 'probe_by_entropy.csv'))
     ambiguity_ablation_paths = glob.glob(os.path.join(seed_dir, 'fold*', 'ambiguity', 'ablation_by_entropy.csv'))
     ambiguity_outputs = []
     if ambiguity_probe_paths:
         aggregate_rows(ambiguity_probe_paths, ['split', 'entropy_group', 'layer'], ['mean_nll'],
-                       os.path.join(summary_dir, 'probe_ambiguity_summary.csv'))
+                       os.path.join(summary_dir, 'probe_ambiguity_summary.csv'), eval_split)
         ambiguity_outputs.append(os.path.join(summary_dir, 'probe_ambiguity_summary.csv'))
     if ambiguity_ablation_paths:
         aggregate_rows(ambiguity_ablation_paths, ['split', 'entropy_group', 'condition'], ['mean_delta_nll'],
-                       os.path.join(summary_dir, 'ablation_ambiguity_summary.csv'))
+                       os.path.join(summary_dir, 'ablation_ambiguity_summary.csv'), eval_split)
         ambiguity_outputs.append(os.path.join(summary_dir, 'ablation_ambiguity_summary.csv'))
     if ambiguity_outputs:
         combined_rows = []
@@ -141,15 +147,22 @@ def summarize(root, seed=1):
                 })
         write_csv(os.path.join(summary_dir, 'ambiguity_summary.csv'), combined_rows)
 
-    print(f'Saved fold summaries to {summary_dir}')
+    with open(os.path.join(summary_dir, 'summary_info.txt'), 'w', encoding='utf-8') as output:
+        output.write(f'Seed: {seed}\nEvaluation split: {eval_split}\n')
+        output.write(f'Folds included: {len(fold_numbers)} ({", ".join(map(str, fold_numbers))})\n')
+        output.write('Summary type: 5-fold\n' if fold_numbers == [1, 2, 3, 4, 5]
+                     else f'Summary type: partial ({len(fold_numbers)} fold(s))\n')
+    print(f'Saved fold summaries to {summary_dir} ({len(fold_numbers)} folds, {eval_split})')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', default='layer_analysis')
     parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--eval_split', choices=['dev', 'test'], default='dev')
+    parser.add_argument('--require_all_folds', action='store_true')
     args = parser.parse_args()
-    summarize(args.root, args.seed)
+    summarize(args.root, args.seed, args.eval_split, args.require_all_folds)
 
 
 if __name__ == '__main__':

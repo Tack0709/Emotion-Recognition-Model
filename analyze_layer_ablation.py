@@ -37,7 +37,7 @@ def distribution_summary(targets, predictions):
     return result
 
 
-def analyze(checkpoint_path, fold_dir, output_dir=None, data_dir='output_data', device='auto'):
+def analyze(checkpoint_path, fold_dir, output_dir=None, data_dir='output_data', device='auto', eval_split='dev'):
     checkpoint = load_checkpoint(checkpoint_path)
     if not isinstance(checkpoint.get('args'), dict):
         raise ValueError('Checkpoint does not contain saved experiment arguments')
@@ -57,7 +57,7 @@ def analyze(checkpoint_path, fold_dir, output_dir=None, data_dir='output_data', 
     model.to(device).eval()
 
     train = load_features(fold_dir, 'train')
-    splits = {name: load_features(fold_dir, name) for name in ('train', 'dev', 'test')}
+    splits = {eval_split: load_features(fold_dir, eval_split)}
     layer_names = [f'H{i}' for i in range(args.gnn_layers + 1)] + ['Fused']
     means = {name: train[name].mean(axis=0) for name in layer_names}
     output_dir = output_dir or os.path.join(fold_dir, 'ablation')
@@ -142,15 +142,15 @@ def analyze(checkpoint_path, fold_dir, output_dir=None, data_dir='output_data', 
     write_csv(os.path.join(output_dir, 'utterance_deltas.csv'), utterance_rows)
 
     import matplotlib.pyplot as plt
-    test_rows = [row for row in metric_rows if row['split'] == 'test']
+    eval_rows = [row for row in metric_rows if row['split'] == eval_split]
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.bar([row['condition'] for row in test_rows], [row['delta_nll_vs_baseline'] for row in test_rows])
+    ax.bar([row['condition'] for row in eval_rows], [row['delta_nll_vs_baseline'] for row in eval_rows])
     ax.axhline(0, color='black', linewidth=0.8)
     ax.set_ylabel('ΔNLL (without layer - baseline)')
-    ax.set_title('Fixed-head layer ablation on test split')
+    ax.set_title(f'Fixed-head layer ablation on {eval_split} split')
     ax.tick_params(axis='x', rotation=30)
     fig.tight_layout()
-    fig.savefig(os.path.join(output_dir, 'delta_nll.png'), dpi=160)
+    fig.savefig(os.path.join(output_dir, f'delta_nll_{eval_split}.png'), dpi=160)
     plt.close(fig)
     print(f'Saved ablation results to {output_dir}')
 
@@ -162,8 +162,9 @@ def main():
     parser.add_argument('--output_dir', default=None)
     parser.add_argument('--data_dir', default='output_data')
     parser.add_argument('--device', default='auto', choices=['auto', 'cpu', 'cuda'])
+    parser.add_argument('--eval_split', choices=['dev', 'test'], default='dev')
     args = parser.parse_args()
-    analyze(args.checkpoint, args.fold_dir, args.output_dir, args.data_dir, args.device)
+    analyze(args.checkpoint, args.fold_dir, args.output_dir, args.data_dir, args.device, args.eval_split)
 
 
 if __name__ == '__main__':
