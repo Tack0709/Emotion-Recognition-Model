@@ -108,9 +108,10 @@ class attentive_node_features(nn.Module):
         scores = torch.bmm(x, features.permute(0, 2, 1)) # (B, N, N)
         
         # マスク適用（0の部分を-infに）
+        scores = torch.tanh(scores)
         scores = scores.masked_fill(mask == 0, -1e9)
         
-        alpha = F.softmax(torch.tanh(scores), dim=2) 
+        alpha = F.softmax(scores, dim=2)
         attn_pool = torch.bmm(alpha, features) # (B, N, D)
 
         return attn_pool

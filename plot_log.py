@@ -4,7 +4,7 @@ import argparse
 import re
 import matplotlib.pyplot as plt
 
-def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma, train_nma_test_ma, full=False): # ★追加: 引数
+def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standard_gnn, edl_r2, train_ma_test_nma, train_nma_test_ma, full=False, nodal_att_type=None, raw_emotions=False): # ★追加: 引数
     # --- 1. アーキテクチャ名の決定 ---
     if edl_r2:
         arch_name = "edl_r2"
@@ -39,6 +39,13 @@ def find_log_files(log_dir, eval_metric, seed, nma, modality, simple_nn, standar
     else:
         mod_pat = modality if modality else '*'
         target_dir_pattern = os.path.join(base_dir_pattern, mod_pat)
+
+    if arch_name == 'dag_erc':
+        target_dir_pattern = os.path.join(
+            target_dir_pattern, f"nodal_{nodal_att_type or 'none'}"
+        )
+    if raw_emotions:
+        target_dir_pattern = os.path.join(target_dir_pattern, 'all_category')
 
     file_pattern = f"logging_{eval_metric}_fold*.log"
     search_path = os.path.join(target_dir_pattern, file_pattern)
@@ -184,6 +191,8 @@ def main():
     parser.add_argument('--train_ma_test_nma', action='store_true')
     parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
     parser.add_argument('--full', action='store_true')
+    parser.add_argument('--nodal_att_type', type=str, choices=['global', 'past'], default=None)
+    parser.add_argument('--raw_emotions', action='store_true')
 
     args = parser.parse_args()
 
@@ -191,7 +200,8 @@ def main():
     log_files = find_log_files(
         args.log_dir, args.eval_metric, args.seed, args.nma, args.modality,
         args.simple_nn, args.standard_gnn, args.edl_r2,
-        args.train_ma_test_nma, args.train_nma_test_ma, args.full # ★追加
+        args.train_ma_test_nma, args.train_nma_test_ma, args.full,
+        args.nodal_att_type, args.raw_emotions # ★追加
     )
     
     if not log_files:
