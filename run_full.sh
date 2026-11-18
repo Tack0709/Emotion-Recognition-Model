@@ -172,8 +172,8 @@ for modality in "${MODALITIES[@]}"; do
             --standard_gnn) RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/standard_gnn" ;;
             *) RESULT_DIR="${LOG_ROOT}/seed${SEED}/${MODE}/${modality}" ;;
         esac
-        if [[ -z "$architecture_flag" ]]; then
-            RESULT_DIR="${RESULT_DIR}/nodal_${NODAL_ATT_NAME}"
+        if [[ -z "$architecture_flag" && -n "$nodal_att_type" ]]; then
+            RESULT_DIR="${RESULT_DIR}/nodal_${nodal_att_type}"
         fi
         if [[ "$RAW_EMOTIONS" == true ]]; then
             RESULT_DIR="${RESULT_DIR}/all_category"

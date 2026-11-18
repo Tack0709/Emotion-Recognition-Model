@@ -51,10 +51,8 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     else:
         target_dir_pattern = os.path.join(base_dir_pattern, modality)
 
-    if arch_name == 'dag_erc':
-        target_dir_pattern = os.path.join(
-            target_dir_pattern, f"nodal_{nodal_att_type or 'none'}"
-        )
+    if arch_name == 'dag_erc' and nodal_att_type is not None:
+        target_dir_pattern = os.path.join(target_dir_pattern, f'nodal_{nodal_att_type}')
     if raw_emotions:
         target_dir_pattern = os.path.join(target_dir_pattern, 'all_category')
 
