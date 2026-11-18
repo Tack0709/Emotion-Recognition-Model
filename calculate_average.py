@@ -8,7 +8,8 @@ import re
 def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=None, 
                       seed=None, nma=False, modality='multimodal', 
                       simple_nn=False, standard_gnn=False, edl_r2=False,
-                      train_ma_test_nma=False, train_nma_test_ma=False, full=False): # ★追加: 引数
+                      train_ma_test_nma=False, train_nma_test_ma=False, full=False,
+                      raw_emotions=False): # ★追加: 引数
     """
     指定されたディレクトリ内のログファイルを読み込み、
     交差検証の平均スコア（F1, NLL, Acc）を計算して表示・保存する。
@@ -49,6 +50,9 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
         target_dir_pattern = os.path.join(base_dir_pattern, arch_name)
     else:
         target_dir_pattern = os.path.join(base_dir_pattern, modality)
+
+    if raw_emotions:
+        target_dir_pattern = os.path.join(target_dir_pattern, 'all_category')
 
     # ログファイルの検索パターン構築
     log_filename_pattern = f"logging_{eval_metric}_fold*.log"
@@ -98,6 +102,7 @@ def calculate_average(log_dir='saved_models', eval_metric='loss', output_file=No
     result_lines.append(f"Metric      : {eval_metric}")
     result_lines.append(f"Modality    : {modality}")
     result_lines.append(f"Mode        : {mode_dirname}")
+    result_lines.append(f"Label Mode  : {'raw emotions' if raw_emotions else 'aggregated'}")
     result_lines.append(f"Seed        : {seed if seed is not None else 'All'}")
     result_lines.append(f"Found Logs  : {len(log_files)}")
     result_lines.append("-" * 40)
@@ -221,6 +226,8 @@ if __name__ == "__main__":
     parser.add_argument('--train_ma_test_nma', action='store_true')
     parser.add_argument('--train_nma_test_ma', action='store_true') # ★追加
     parser.add_argument('--full', action='store_true')
+    parser.add_argument('--raw_emotions', action='store_true',
+                        help='Search logs under the all_category directory')
     
     args = parser.parse_args()
     
@@ -236,5 +243,6 @@ if __name__ == "__main__":
         edl_r2=args.edl_r2,
         train_ma_test_nma=args.train_ma_test_nma,
         train_nma_test_ma=args.train_nma_test_ma, # ★追加
-        full=args.full
+        full=args.full,
+        raw_emotions=args.raw_emotions
     )
