@@ -117,7 +117,8 @@ class DAGERC_multimodal(nn.Module):
 
         self.attentive_node_features = attentive_node_features(in_dim)
 
-    def forward(self, features_text, features_audio, adj, s_mask, s_mask_onehot, lengths):
+    def forward(self, features_text, features_audio, adj, s_mask, s_mask_onehot, lengths,
+                return_intermediates=False):
         # features_text/audio: (B, N, 768)
         num_utter = features_text.size()[1]
 
@@ -139,9 +140,12 @@ class DAGERC_multimodal(nn.Module):
             
             # --- 出力層の分岐 (EDL or Softmax) ---
             if getattr(self.args, 'edl_r2', False):
-                return torch.exp(logits) # Evidence
+                predictions = torch.exp(logits) # Evidence
             else:
-                return F.softmax(logits, dim=2)
+                predictions = F.softmax(logits, dim=2)
+            if return_intermediates:
+                return predictions, {'Fused': features_fused, 'pre_mlp': features_fused}
+            return predictions
 
         # ==========================================
         # GNN使用モード (通常DAG-ERC または Standard GNN)
@@ -187,11 +191,13 @@ class DAGERC_multimodal(nn.Module):
         
         # 4. Skip connection (融合特徴量)
         # Skip connection: GNN各層(300)と融合特徴(512)を結合 ⇒ (B, N, in_dim)
+        layer_features = list(H)
         H.append(features_fused) 
         
         H = torch.cat(H, dim = 2) 
 
         H = self.attentive_node_features(H, lengths, self.nodal_att_type) 
+        pre_mlp = H
 
         # 5. 出力
         logits = self.out_mlp(H) # (B, N, num_class)
@@ -203,7 +209,14 @@ class DAGERC_multimodal(nn.Module):
             # EDLの場合: 証拠 (Evidence) を返す
             # Evidence = exp(logits) で非負の値を保証
             # (場合によっては +1 することもあるが、loss.pyの仕様に合わせる)
-            return torch.exp(logits)
+            predictions = torch.exp(logits)
+        else:
+            # 通常の場合: 確率 (Probability) を返す
+            predictions = F.softmax(logits, dim=2)
         
-        # 通常の場合: 確率 (Probability) を返す
-        return F.softmax(logits, dim=2)
+        if return_intermediates:
+            intermediates = {f'H{index}': value for index, value in enumerate(layer_features)}
+            intermediates['Fused'] = features_fused
+            intermediates['pre_mlp'] = pre_mlp
+            return predictions, intermediates
+        return predictions
