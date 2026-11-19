@@ -29,11 +29,11 @@ BERT_MODEL="bert-base-uncased"
 WAV2VEC_MODEL="facebook/wav2vec2-base-960h"
 
 # Stepごとの実行選択。後続Stepは、前段階の出力が存在すること。
-RUN_FEATURE_EXTRACTION=true            # Step 0: checkpointからtrain/dev特徴を抽出（Testは明示指定時のみ）
-RUN_CKA=true                           # Step 1: dev上のH0-H4 Linear CKA
-RUN_LAYER_PROBES=false                 # Step 2: Trainで学習、Devで評価
-RUN_LAYER_ABLATION=false               # Step 3: Train平均で置換、Devで評価
-RUN_AMBIGUITY_ANALYSIS=false           # Step 4: Train由来entropy境界をDevに適用
+RUN_FEATURE_EXTRACTION=false           # Step 0: checkpointからtrain/dev特徴を抽出（Testは明示指定時のみ）
+RUN_CKA=false                          # Step 1: dev上のH0-H4 Linear CKA
+RUN_LAYER_PROBES=true                  # Step 2: Trainで学習、Devで評価
+RUN_LAYER_ABLATION=true                # Step 3: Train平均で置換、Devで評価
+RUN_AMBIGUITY_ANALYSIS=true            # Step 4: Train由来entropy境界をDevに適用
 RUN_FOLD_SUMMARY=false                 # fold別結果をseed単位で集計
 
 # ProbeはDAG-ERC本体を固定したまま、Probe層だけを学習する。
@@ -72,21 +72,23 @@ fi
 # 入力データ確認
 # =============================================================================
 
-REQUIRED_FILES=(
-    "IEMOCAP-hardlabel.npy"
-    "IEMOCAP-softlabel-sum.npy"
-    "order.pkl"
-    "text_dict.pkl"
-    "speaker_vocab.pkl"
-    "bert-base-diag.npy"
-    "w2v2-ft-diag.npy"
-)
-for filename in "${REQUIRED_FILES[@]}"; do
-    if [[ ! -f "$DATA_DIR/$filename" ]]; then
-        echo "必要なファイルがありません: $DATA_DIR/$filename" >&2
-        exit 1
-    fi
-done
+if [[ "$RUN_FEATURE_EXTRACTION" == true ]]; then
+    REQUIRED_FILES=(
+        "IEMOCAP-hardlabel.npy"
+        "IEMOCAP-softlabel-sum.npy"
+        "order.pkl"
+        "text_dict.pkl"
+        "speaker_vocab.pkl"
+        "bert-base-diag.npy"
+        "w2v2-ft-diag.npy"
+    )
+    for filename in "${REQUIRED_FILES[@]}"; do
+        if [[ ! -f "$DATA_DIR/$filename" ]]; then
+            echo "特徴抽出に必要な前処理ファイルがありません: $DATA_DIR/$filename" >&2
+            exit 1
+        fi
+    done
+fi
 
 if [[ "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ]]; then
     if [[ "$RUN_FEATURE_EXTRACTION" != true ]]; then
@@ -109,6 +111,10 @@ for fold in "${FOLDS[@]}"; do
             echo "CHECKPOINT_DIRを既存のfull/multimodal/Noneモデルに合わせてください。" >&2
             exit 1
         fi
+    fi
+    if [[ "$RUN_LAYER_ABLATION" == true && ! -f "$DATA_DIR/speaker_vocab.pkl" ]]; then
+        echo "Ablationに必要な話者vocabularyがありません: $DATA_DIR/speaker_vocab.pkl" >&2
+        exit 1
     fi
     if [[ "$RUN_FEATURE_EXTRACTION" != true && ( "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ) ]]; then
         for split in train dev; do
