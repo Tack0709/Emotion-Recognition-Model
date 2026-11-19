@@ -35,7 +35,7 @@ def load_vocab(data_dir, args=None):
 
     return speaker_vocab, label_vocab
 
-def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False, train_nma=None, test_nma=None, preserve_order=False):
+def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0, args=None, test_session=5, dev_ratio=0.1, nma=False, train_nma=None, test_nma=None, preserve_order=False, splits=None):
     print('building vocab.. ')
     speaker_vocab, label_vocab = load_vocab(data_dir, args)
     
@@ -50,14 +50,23 @@ def get_multimodal_loaders(data_dir='output_data', batch_size=32, num_workers=0,
     trainset = MultimodalDAGDataset(split='train', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=train_nma)
     devset = MultimodalDAGDataset(split='dev', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=train_nma)
     
-    # split='test' には test_nma を適用
-    testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=test_nma)
+    # 探索分析ではTestデータをロードしないため、必要なsplitだけ生成できる。
+    # 既存の学習コードとの互換性のため、未指定時は従来どおり全splitを作る。
+    requested_splits = set(splits or ('train', 'dev', 'test'))
+    if not requested_splits.issubset({'train', 'dev', 'test'}):
+        raise ValueError(f'Unsupported data splits: {sorted(requested_splits)}')
+    testset = None
+    if 'test' in requested_splits:
+        # split='test' には test_nma を適用
+        testset = MultimodalDAGDataset(split='test', speaker_vocab=speaker_vocab, args=args, data_dir=data_dir, test_session=test_session, dev_ratio=dev_ratio, nma=test_nma)
     
     train_sampler = None if preserve_order else get_train_valid_sampler(trainset)
     valid_sampler = None if preserve_order else get_train_valid_sampler(devset)
 
     train_loader = DataLoader(trainset, batch_size=batch_size, sampler=train_sampler, collate_fn=trainset.collate_fn, num_workers=num_workers)
     valid_loader = DataLoader(devset, batch_size=batch_size, sampler=valid_sampler, collate_fn=devset.collate_fn, num_workers=num_workers)
-    test_loader = DataLoader(testset, batch_size=batch_size, collate_fn=testset.collate_fn, num_workers=num_workers)
+    test_loader = None
+    if testset is not None:
+        test_loader = DataLoader(testset, batch_size=batch_size, collate_fn=testset.collate_fn, num_workers=num_workers)
 
     return train_loader, valid_loader, test_loader, speaker_vocab, label_vocab

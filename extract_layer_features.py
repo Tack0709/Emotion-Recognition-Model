@@ -1,6 +1,8 @@
 """Extract fixed DAG-ERC intermediate features for one saved checkpoint."""
 import argparse
+import json
 import os
+import random
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +10,34 @@ import torch
 
 from dataloader import get_multimodal_loaders
 from model import DAGERC_multimodal
+
+
+def verify_reconstructed_split(train_loader, dev_loader, seed, test_session, dev_ratio):
+    train_dataset = train_loader.dataset
+    dev_dataset = dev_loader.dataset
+    if train_dataset.order.keys() != dev_dataset.order.keys():
+        raise ValueError('Train and Dev datasets loaded different dialogue metadata')
+
+    test_prefix = f'Ses0{test_session}'
+    candidate_sessions = sorted(
+        session_id for session_id in train_dataset.order
+        if not session_id.startswith(test_prefix)
+    )
+    random.Random(seed).shuffle(candidate_sessions)
+    dev_size = int(len(candidate_sessions) * dev_ratio)
+    expected_dev = candidate_sessions[:dev_size]
+    expected_train = candidate_sessions[dev_size:]
+    actual_train = list(train_dataset.session_list)
+    actual_dev = list(dev_dataset.session_list)
+    if actual_train != expected_train or actual_dev != expected_dev:
+        raise ValueError(
+            'Reconstructed Train/Dev dialogue split does not match the checkpoint seed, '
+            'test session, and dev_ratio')
+    if set(actual_train) & set(actual_dev):
+        raise ValueError('Train and Dev dialogue sessions overlap')
+    if set(actual_train) | set(actual_dev) != set(candidate_sessions):
+        raise ValueError('Train and Dev dialogue sessions do not cover the non-Test sessions')
+    return actual_train, actual_dev
 
 
 def entropy_from_probabilities(probabilities):
@@ -132,6 +162,11 @@ def extract_checkpoint(checkpoint_path, data_dir=None, output_dir='layer_analysi
         train_nma=True,
         test_nma=True,
         preserve_order=True,
+        splits=splits,
+    )
+    train_sessions, dev_sessions = verify_reconstructed_split(
+        train_loader, dev_loader, int(args.seed), checkpoint_fold,
+        float(getattr(args, 'dev_ratio', 0.2)),
     )
     model = DAGERC_multimodal(args, len(label_vocab['itos']))
     if len(label_vocab['itos']) != 5:
@@ -142,6 +177,31 @@ def extract_checkpoint(checkpoint_path, data_dir=None, output_dir='layer_analysi
 
     fold_dir = os.path.join(output_dir, f"seed{args.seed}", f"fold{args.test_session}", 'features')
     os.makedirs(fold_dir, exist_ok=True)
+    existing_outputs = [os.path.join(fold_dir, f'{split}_features.npz') for split in splits
+                        if os.path.exists(os.path.join(fold_dir, f'{split}_features.npz'))]
+    if existing_outputs and not overwrite:
+        raise FileExistsError(
+            'Layer feature files already exist; refusing to overwrite: ' + ', '.join(existing_outputs)
+        )
+    manifest_path = os.path.join(os.path.dirname(fold_dir), 'split_manifest.json')
+    manifest = {
+        'seed': int(args.seed), 'fold': int(args.test_session),
+        'test_session': int(args.test_session), 'dev_ratio': float(getattr(args, 'dev_ratio', 0.2)),
+        'split_source': 'reconstructed from checkpoint args and current deterministic dataset split',
+        'train_sessions': train_sessions, 'dev_sessions': dev_sessions,
+        'test_split_loaded': 'test' in splits,
+    }
+    if os.path.isfile(manifest_path) and not overwrite:
+        with open(manifest_path, encoding='utf-8') as source:
+            previous_manifest = json.load(source)
+        manifest_keys = ('seed', 'fold', 'test_session', 'dev_ratio', 'train_sessions',
+                         'dev_sessions', 'split_source')
+        if any(previous_manifest.get(key) != manifest[key] for key in manifest_keys):
+            raise ValueError(f'Existing split manifest does not match reconstructed split: {manifest_path}')
+    else:
+        with open(manifest_path, 'w', encoding='utf-8') as output:
+            json.dump(manifest, output, ensure_ascii=False, indent=2)
+        print(f'Saved reconstructed Train/Dev split manifest to {manifest_path}')
     class_names = [label_vocab['itos'][i] for i in range(len(label_vocab['itos']))]
     loaders = {'train': train_loader, 'dev': dev_loader, 'test': test_loader}
     for split_name in splits:

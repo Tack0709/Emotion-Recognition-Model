@@ -14,7 +14,7 @@ CHECKPOINT_DIR="saved_models/seed1/full/multimodal/best_model"
 ANALYSIS_ROOT="layer_analysis"
 IEMOCAP_ROOT="/home/datasets/mizuno/IEMOCAP_full_release/IEMOCAP_full_release"
 SEED=1
-FOLDS=(1)
+FOLDS=(2 3 4 5) # Fold 1は完了済みの結果を再利用する
 ANALYSIS_SPLITS=("train" "dev")
 EVAL_SPLIT="dev"                    # probe / ablation / ambiguity の評価対象: dev / test
 DEVICE="auto"                         # auto / cpu / cuda
@@ -29,12 +29,21 @@ BERT_MODEL="bert-base-uncased"
 WAV2VEC_MODEL="facebook/wav2vec2-base-960h"
 
 # Stepごとの実行選択。後続Stepは、前段階の出力が存在すること。
-RUN_FEATURE_EXTRACTION=false           # Step 0: checkpointからtrain/dev特徴を抽出（Testは明示指定時のみ）
-RUN_CKA=false                          # Step 1: dev上のH0-H4 Linear CKA
+RUN_FEATURE_EXTRACTION=true            # Step 0: checkpointからtrain/dev特徴を抽出（Testは明示指定時のみ）
+RUN_CKA=true                           # Step 1: dev上のH0-H4 Linear CKA
 RUN_LAYER_PROBES=true                  # Step 2: Trainで学習、Devで評価
 RUN_LAYER_ABLATION=true                # Step 3: Train平均で置換、Devで評価
 RUN_AMBIGUITY_ANALYSIS=true            # Step 4: Train由来entropy境界をDevに適用
+RUN_PREDICTION_DIAGNOSTICS=true        # Step 5: Ablation前後の分布・クラス確率変化
 RUN_FOLD_SUMMARY=false                 # fold別結果をseed単位で集計
+
+# Fold 1の保存済み予測だけで詳細分析する場合は、次のように変更する。
+# FOLDS=(1)
+# RUN_FEATURE_EXTRACTION=false; RUN_CKA=false; RUN_LAYER_PROBES=false
+# RUN_LAYER_ABLATION=false; RUN_AMBIGUITY_ANALYSIS=false
+# RUN_PREDICTION_DIAGNOSTICS=true; RUN_FOLD_SUMMARY=false
+# 5-fold集計だけ行う場合は、FOLDS=(1 2 3 4 5)として全Stepをfalse、
+# RUN_PREDICTION_DIAGNOSTICS=false、RUN_FOLD_SUMMARY=trueにする。
 
 # ProbeはDAG-ERC本体を固定したまま、Probe層だけを学習する。
 PROBE_EPOCHS=100
@@ -90,7 +99,7 @@ if [[ "$RUN_FEATURE_EXTRACTION" == true ]]; then
     done
 fi
 
-if [[ "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ]]; then
+if [[ "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true || "$RUN_PREDICTION_DIAGNOSTICS" == true ]]; then
     if [[ "$RUN_FEATURE_EXTRACTION" != true ]]; then
         echo "特徴抽出をスキップする場合、各foldのfeatures/*.npzが既に必要です。"
     fi
@@ -116,7 +125,11 @@ for fold in "${FOLDS[@]}"; do
         echo "Ablationに必要な話者vocabularyがありません: $DATA_DIR/speaker_vocab.pkl" >&2
         exit 1
     fi
-    if [[ "$RUN_FEATURE_EXTRACTION" != true && ( "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true ) ]]; then
+    if [[ "$RUN_PREDICTION_DIAGNOSTICS" == true && "$EVAL_SPLIT" != dev ]]; then
+        echo "予測分布詳細分析はDev splitのみ対応しています。EVAL_SPLIT=devにしてください。" >&2
+        exit 1
+    fi
+    if [[ "$RUN_FEATURE_EXTRACTION" != true && ( "$RUN_CKA" == true || "$RUN_LAYER_PROBES" == true || "$RUN_LAYER_ABLATION" == true || "$RUN_AMBIGUITY_ANALYSIS" == true || "$RUN_PREDICTION_DIAGNOSTICS" == true ) ]]; then
         for split in train dev; do
             if [[ ! -f "$FEATURE_DIR/${split}_features.npz" ]]; then
                 echo "抽出済み特徴ファイルがありません: $FEATURE_DIR/${split}_features.npz" >&2
@@ -128,9 +141,29 @@ for fold in "${FOLDS[@]}"; do
             exit 1
         fi
     fi
-    if [[ "$RUN_AMBIGUITY_ANALYSIS" == true && "$RUN_LAYER_PROBES" != true && ! -f "$FOLD_DIR/probe/predictions/${EVAL_SPLIT}_H0.npz" ]]; then
-        echo "曖昧度別Probe分析には既存のProbe予測が必要です: $FOLD_DIR/probe/predictions/" >&2
-        exit 1
+    if [[ "$RUN_AMBIGUITY_ANALYSIS" == true && "$RUN_LAYER_PROBES" != true ]]; then
+        for layer in H0 H1 H2 H3 H4 Fused; do
+            if [[ ! -f "$FOLD_DIR/probe/predictions/${EVAL_SPLIT}_${layer}.npz" ]]; then
+                echo "曖昧度別Probe分析に必要な予測ファイルがありません: $FOLD_DIR/probe/predictions/${EVAL_SPLIT}_${layer}.npz" >&2
+                exit 1
+            fi
+        done
+    fi
+    if [[ "$RUN_PREDICTION_DIAGNOSTICS" == true && "$RUN_LAYER_PROBES" != true ]]; then
+        for layer in H0 H1 H2 H3 H4 Fused; do
+            if [[ ! -f "$FOLD_DIR/probe/predictions/dev_${layer}.npz" ]]; then
+                echo "予測分布詳細分析の5-fold Probe比較に必要なファイルがありません: $FOLD_DIR/probe/predictions/dev_${layer}.npz" >&2
+                exit 1
+            fi
+        done
+    fi
+    if [[ ( "$RUN_AMBIGUITY_ANALYSIS" == true || "$RUN_PREDICTION_DIAGNOSTICS" == true ) && "$RUN_LAYER_ABLATION" != true ]]; then
+        for layer in H0 H1 H2 H3 H4 Fused; do
+            if [[ ! -f "$FOLD_DIR/ablation/dev_without_${layer}_predictions.npz" ]]; then
+                echo "曖昧度/予測分布分析に必要なAblation予測がありません: $FOLD_DIR/ablation/dev_without_${layer}_predictions.npz" >&2
+                exit 1
+            fi
+        done
     fi
     if [[ "$RUN_AMBIGUITY_ANALYSIS" == true && "$RUN_LAYER_ABLATION" != true && ! -f "$FOLD_DIR/ablation/utterance_deltas.csv" ]]; then
         echo "曖昧度別Ablation分析には既存のablation結果が必要です: $FOLD_DIR/ablation/utterance_deltas.csv" >&2
@@ -191,6 +224,11 @@ for fold in "${FOLDS[@]}"; do
 
     if [[ "$RUN_AMBIGUITY_ANALYSIS" == true ]]; then
         python analyze_layer_ambiguity.py --fold_dir "$FOLD_DIR" --eval_split "$EVAL_SPLIT"
+    fi
+    if [[ "$RUN_PREDICTION_DIAGNOSTICS" == true ]]; then
+        python analyze_layer_prediction_diagnostics.py \
+            --fold_dir "$FOLD_DIR" \
+            --eval_split "$EVAL_SPLIT"
     fi
 done
 

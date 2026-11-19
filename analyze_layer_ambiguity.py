@@ -5,6 +5,8 @@ import os
 
 import numpy as np
 
+from distribution_metrics import calculate_distribution_metrics
+
 
 GROUPS = ('low', 'medium', 'high')
 
@@ -40,6 +42,27 @@ def group_entropy(values, lower, upper):
     return groups
 
 
+def keyed_order(reference, candidate, label):
+    ref_keys = [(str(d), str(u)) for d, u in zip(reference['dialog_id'], reference['utterance_id'])]
+    cand_keys = [(str(d), str(u)) for d, u in zip(candidate['dialog_id'], candidate['utterance_id'])]
+    if len(set(ref_keys)) != len(ref_keys) or len(set(cand_keys)) != len(cand_keys):
+        raise ValueError(f'Duplicate utterance IDs while aligning {label}')
+    ref_index = {key: index for index, key in enumerate(ref_keys)}
+    cand_index = {key: index for index, key in enumerate(cand_keys)}
+    if ref_index.keys() != cand_index.keys():
+        raise ValueError(f'{label} utterance IDs do not match the {reference.get("split", "eval")} features')
+    return [cand_index[key] for key in ref_keys]
+
+
+def kl_tvd(targets, predictions):
+    kls, tvds = [], []
+    for target, prediction in zip(targets, predictions):
+        metrics = calculate_distribution_metrics(target, prediction)
+        kls.append(metrics['kl'] if metrics['kl'] is not None else np.nan)
+        tvds.append(0.5 * float(np.abs(target - prediction).sum()))
+    return np.asarray(kls, dtype=np.float64), np.asarray(tvds, dtype=np.float64)
+
+
 def analyze(fold_dir, output_dir=None, eval_split='dev'):
     feature_dir = os.path.join(fold_dir, 'features')
     train = load_npz(os.path.join(feature_dir, 'train_features.npz'))
@@ -70,13 +93,20 @@ def analyze(fold_dir, output_dir=None, eval_split='dev'):
         if not os.path.isfile(prediction_path):
             raise FileNotFoundError(f'Missing probe predictions: {prediction_path}')
         prediction = load_npz(prediction_path)
+        prediction_order = keyed_order(features, prediction, f'Probe {layer}')
+        pred_prob = prediction['pred_prob'][prediction_order]
+        if not np.allclose(prediction['true_soft'][prediction_order], features['true_soft'], atol=1e-6):
+            raise ValueError(f'Probe {layer} targets do not match {eval_split} features')
+        probe_kl, probe_tvd = kl_tvd(features['true_soft'], pred_prob)
         for group in GROUPS:
             selected = groups == group
-            values = prediction['per_utterance_nll'][selected]
+            ordered_values = prediction['per_utterance_nll'][prediction_order][selected]
             probe_rows.append({
                 'split': eval_split, 'entropy_group': group, 'layer': layer,
                 'count': int(selected.sum()),
-                'mean_nll': float(np.mean(values)) if len(values) else np.nan,
+                'mean_nll': float(np.mean(ordered_values)) if len(ordered_values) else np.nan,
+                'mean_kl': float(np.mean(probe_kl[selected])) if selected.any() else np.nan,
+                'mean_tvd': float(np.mean(probe_tvd[selected])) if selected.any() else np.nan,
                 'train_q33': float(lower), 'train_q67': float(upper),
             })
     write_csv(os.path.join(output_dir, 'probe_by_entropy.csv'), probe_rows)
@@ -89,17 +119,31 @@ def analyze(fold_dir, output_dir=None, eval_split='dev'):
     }
     split_rows = [row for row in ablation_rows_raw if row['split'] == eval_split]
     conditions = sorted({row['condition'] for row in split_rows})
+    baseline_kl, baseline_tvd = kl_tvd(features['true_soft'], features['pred_prob'])
     for condition in conditions:
+        prediction_path = os.path.join(fold_dir, 'ablation', f'{eval_split}_{condition}_predictions.npz')
+        prediction = load_npz(prediction_path)
+        prediction_order = keyed_order(features, prediction, f'Ablation {condition}')
+        pred_prob = prediction['pred_prob'][prediction_order]
+        if not np.allclose(prediction['true_soft'][prediction_order], features['true_soft'], atol=1e-6):
+            raise ValueError(f'Ablation {condition} targets do not match {eval_split} features')
+        ablation_kl, ablation_tvd = kl_tvd(features['true_soft'], pred_prob)
         condition_rows = [row for row in split_rows if row['condition'] == condition]
+        delta_nll_by_key = {(row['dialog_id'], row['utterance_id']): float(row['delta_nll'])
+                            for row in condition_rows}
+        if delta_nll_by_key.keys() != ids_to_group.keys():
+            raise ValueError(f'Ablation ΔNLL utterance IDs do not match {eval_split} features for {condition}')
         for group in GROUPS:
-            values = [
-                float(row['delta_nll']) for row in condition_rows
-                if ids_to_group.get((row['dialog_id'], row['utterance_id'])) == group
-            ]
+            selected = groups == group
+            values = [delta_nll_by_key.get(key, np.nan) for key, assigned in ids_to_group.items()
+                      if assigned == group]
+            values = [value for value in values if np.isfinite(value)]
             ablation_rows.append({
                 'split': eval_split, 'entropy_group': group, 'condition': condition,
-                'count': len(values),
+                'count': int(selected.sum()),
                 'mean_delta_nll': float(np.mean(values)) if values else np.nan,
+                'mean_delta_kl': float(np.mean((ablation_kl - baseline_kl)[selected])) if selected.any() else np.nan,
+                'mean_delta_tvd': float(np.mean((ablation_tvd - baseline_tvd)[selected])) if selected.any() else np.nan,
                 'train_q33': float(lower), 'train_q67': float(upper),
             })
     write_csv(os.path.join(output_dir, 'ablation_by_entropy.csv'), ablation_rows)
