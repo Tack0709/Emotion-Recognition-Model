@@ -8,6 +8,9 @@ from collections import defaultdict
 import numpy as np
 
 
+GROUPS = ('low', 'medium', 'high')
+
+
 def read_csv(path):
     with open(path, newline='', encoding='utf-8') as source:
         return list(csv.DictReader(source))
@@ -86,7 +89,7 @@ def save_metric_plot(rows, item_field, metric_field, filename, title, ylabel, it
     for index, item in enumerate(item_order):
         points = sorted(per_item[item])
         if points:
-            offsets = np.linspace(-0.12, 0.12, len(points)) if len(points) > 1 else [0.0]
+            offsets = np.linspace(-0.12, 0.12, len(points)) if len(points) > 1 else np.array([0.0])
             ax.scatter(index + offsets, [value for _, value in points], s=30, label=None)
     ax.axhline(0, color='black', linewidth=0.8)
     tick_labels = [

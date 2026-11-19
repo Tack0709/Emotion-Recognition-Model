@@ -243,6 +243,7 @@ def analyze(fold_dir, output_dir=None, eval_split='dev', top_k=20):
             selected = np.ones(len(groups), dtype=bool) if group == 'all' else groups == group
             entropy_rows.append({
                 'fold': fold_value, 'split': eval_split, 'entropy_group': group,
+                'condition': condition,
                 'count': int(selected.sum()), 'train_q33': float(q33), 'train_q67': float(q67),
                 'mean_true_entropy': finite_mean(true_entropy[selected]),
                 'mean_baseline_pred_entropy': finite_mean(baseline_metrics['entropy'][selected]),
